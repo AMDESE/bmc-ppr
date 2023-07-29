@@ -1,0 +1,49 @@
+project(
+  'amd-bmc-ppr',
+  'cpp',
+  default_options: [
+    'warning_level=3',
+    'werror=true',
+    'cpp_std=c++17'
+  ],
+  license: 'Apache-2.0',
+  version: '1.0',
+)
+
+cpp_args = []
+
+cpp = meson.get_compiler('cpp')
+
+# (Meson requires an absolute path for find_library().)
+libdir = meson.current_source_dir() + './lib/'
+
+apml_dep = cpp.find_library('apml64', dirs : libdir) # ./lib/libapml64.lib
+
+deps = [
+  dependency('libgpiodcxx', default_options: ['bindings=cxx']),
+  dependency('systemd'),
+  dependency('sdbusplus'),
+  dependency('sdeventplus'),
+  dependency('phosphor-logging'),
+  dependency('nlohmann_json'),
+  dependency('threads'),
+  apml_dep,
+]
+
+executable(
+  'amd-bmc-ppr',
+  'src/main.cpp',
+  'src/ppr_Runtime.cpp',
+  include_directories: include_directories('inc'),
+  cpp_args: cpp_args,
+  dependencies: deps,
+  install: true,
+  install_dir: get_option('bindir'))
+
+systemd = dependency('systemd')
+
+install_data(
+  ['service_files/com.amd.ppr.service'],
+  install_dir: systemd.get_pkgconfig_variable('systemdsystemunitdir')
+)
+
