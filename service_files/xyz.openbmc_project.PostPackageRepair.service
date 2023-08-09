@@ -1,12 +1,11 @@
 [Unit]
 Description=PPR manager
-After=com.amd.ppr.service
 
 [Service]
 ExecStart=/usr/bin/amd-bmc-ppr
 SyslogIdentifier=amd-bmc-ppr
-Type=dbus
-BusName=com.amd.ppr
+Type=simple
+BusName=xyz.openbmc_project.PostPackageRepair
 
 [Install]
 WantedBy=multi-user.target

@@ -10,9 +10,18 @@ project(
   version: '1.0',
 )
 
+
+conf_data = configuration_data()
+conf_data.set_quoted('DBUS_OBJECT_NAME', '/xyz/openbmc_project/PostPackageRepair')
+conf_data.set_quoted('DBUS_SERVICE_NAME','xyz.openbmc_project.PostPackageRepair')
+
 cpp_args = []
 
 cpp = meson.get_compiler('cpp')
+
+configure_file(output: 'config.h',
+  configuration: conf_data
+)
 
 # (Meson requires an absolute path for find_library().)
 libdir = meson.current_source_dir() + './lib/'
@@ -33,7 +42,7 @@ deps = [
 executable(
   'amd-bmc-ppr',
   'src/main.cpp',
-  'src/ppr_Runtime.cpp',
+  'src/ppr.cpp',
   include_directories: include_directories('inc'),
   cpp_args: cpp_args,
   dependencies: deps,
@@ -43,7 +52,7 @@ executable(
 systemd = dependency('systemd')
 
 install_data(
-  ['service_files/com.amd.ppr.service'],
+  ['service_files/xyz.openbmc_project.PostPackageRepair.service'],
   install_dir: systemd.get_pkgconfig_variable('systemdsystemunitdir')
 )
 

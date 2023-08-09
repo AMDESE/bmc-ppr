@@ -1,31 +1,40 @@
-#include "ppr_Runtime.hpp"
+#include "ppr.hpp"
 
 int main() {
-	int index;
-	std::vector<struct PPR_Data_Status> pprDataOut;
 
-	boost::asio::io_context ioc;
-	boost::asio::signal_set signals(ioc, SIGINT, SIGTERM);
+	int ret = 0;
 
-	signals.async_wait([&ioc](const boost::system::error_code&, const int&) {
-		ioc.stop();
-	});
+	sd_event *event = nullptr;
+	ret = sd_event_default(&event);
+	if (ret < 0) {
+		sd_journal_print(LOG_ERR, "Error creating a default sd_event handler");
+		return ret;
+	}
 
-	auto bus = std::make_shared<sdbusplus::asio::connection>(ioc);
-	auto objServer = std::make_unique<sdbusplus::asio::object_server>(bus);
+	EventPtr eventP { event };
+	event = nullptr;
 
-	bus->request_name(pprService.data());
+	sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+	sdbusplus::server::manager_t m { bus, DBUS_OBJECT_NAME };
 
-	ppr_Runtime *ppr_runtimeObj = new ppr_Runtime(ioc, *bus, *objServer);
+	bus.request_name(DBUS_SERVICE_NAME);
 
-	//blocking call
-	//Wait for PPR Data In
-	index = 0;
-	ppr_runtimeObj->syncIndex(index);
+	childPprData PprData { bus, DBUS_OBJECT_NAME, eventP };
 
-	ppr_runtimeObj->startRuntimeRepair();
-	ppr_runtimeObj->getRuntimeRepairStatus();
-	ppr_runtimeObj->updatePPRStatustoDBus();
+	sd_journal_print(LOG_DEBUG, "Created PPR Data Object \n");
 
-	ioc.run();
+	try {
+		bus.attach_event(eventP.get(), SD_EVENT_PRIORITY_NORMAL);
+		ret = sd_event_loop(eventP.get());
+		if (ret < 0) {
+			sd_journal_print(LOG_ERR,
+					"Error occurred during the sd_event_loop, RET=%d", ret);
+		}
+	} catch (std::exception &e) {
+		sd_journal_print(LOG_ERR, "Error:%s", e.what());
+		return -1;
+	}
+	return 0;
+
 }
+
