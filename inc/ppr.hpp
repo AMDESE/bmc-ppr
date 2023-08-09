@@ -1,33 +1,33 @@
+/*
+ // Copyright (c) 2023 AMD Inc.
+ //
+ // Licensed under the Apache License, Version 2.0 (the "License");
+ // you may not use this file except in compliance with the License.
+ // You may obtain a copy of the License at
+ //
+ //      http://www.apache.org/licenses/LICENSE-2.0
+ //
+ // Unless required by applicable law or agreed to in writing, software
+ // distributed under the License is distributed on an "AS IS" BASIS,
+ // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ */
 #pragma once
+#include <config.h>
 
-#include <array>
-#include <boost/asio.hpp>
-#include <boost/asio/error.hpp>
-#include <boost/asio/io_service.hpp>
-#include <boost/asio/posix/stream_descriptor.hpp>
-#include <boost/asio/spawn.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <boost/container/flat_map.hpp>
-#include <boost/container/flat_set.hpp>
-#include <boost/date_time/posix_time/posix_time.hpp>
-#include <filesystem>
-#include <fstream>
-#include <future>
-#include <gpiod.hpp>
 #include <iostream>
-#include <mutex>
-#include <phosphor-logging/log.hpp>
-#include <regex>
-#include <sdbusplus/asio/connection.hpp>
-#include <sdbusplus/asio/object_server.hpp>
-#include <sdbusplus/asio/property.hpp>
-#include <shared_mutex>
-#include <string_view>
-#include <utility>
-#include <regex>
-#include <ctype.h>
-#include <nlohmann/json.hpp>
-#include <experimental/filesystem>
+#include <tuple> // for tuple
+#include <vector>
+
+// Library effective with Linux
+#include <unistd.h>
+
+#include <systemd/sd-journal.h>
+
+#include <xyz/openbmc_project/Collection/DeleteAll/server.hpp>
+#include <xyz/openbmc_project/Common/error.hpp>
+#include <xyz/openbmc_project/PostPackageRepair/PprData/server.hpp>
 
 extern "C" {
 #include <sys/stat.h>
@@ -40,21 +40,16 @@ extern "C" {
 #include "esmi_mailbox_nda.h"
 }
 
-// PPR Service
-constexpr std::string_view pprService = "com.amd.ppr";
-constexpr std::string_view pprPath = "/com/amd/ppr";
-constexpr std::string_view pprInterface = "com.amd.ppr";
-
-// Status Interface
-constexpr std::string_view pprStatusInterface = "com.amd.ppr.Status";
-
-
-// file Interface
-constexpr std::string_view pprFileInterface = "com.amd.ppr.File";
-
-
 const int MAX_RETRIES = 10;
 const int RAS_ACTION_ID_RUNTIME_PPR = 0;
+const int PAYLOAD_SIZE = 10;
+const int MAX_REPAIR_SLOTS = 64;
+
+// PPR Service
+
+const static constexpr char *pprDataInPath =
+		"/xyz/openbmc_project/PostPackageRepair/PprData";
+const static constexpr char *PropertiesIntf = "org.freedesktop.DBus.Properties";
 
 enum REPAIRTYPE {
 	runtime = RAS_ACTION_ID_RUNTIME_PPR, boot = 1,
@@ -75,33 +70,68 @@ enum PPR_STATUS {
 };
 
 //PPR File
-struct PPR_Data_In {
-    uint8_t  repairType;
-    uint8_t  repairEntryNum;
-    uint8_t  soc_num;
-    uint8_t  offset;
-    uint16_t payload;
+struct PPR_Data {
+	uint16_t repairEntryNum;
+	uint16_t repairType;
+	uint16_t socNum;
+	uint16_t repairResult;
+	uint16_t payload[PAYLOAD_SIZE];
 };
 
-struct PPR_Data_Status {
-    uint8_t  repairType;
-    uint8_t  repairEntryNum;
-    uint8_t  soc_num;
-    uint8_t  offset;
-    uint8_t  repair_result;
-    uint16_t payload;
+struct EventDeleter {
+	void operator()(sd_event *event) const {
+		event = sd_event_unref(event);
+	}
 };
+using EventPtr = std::unique_ptr<sd_event, EventDeleter>;
 
-struct error_time_stamp {
-  uint8_t    Seconds;
-  uint8_t    Minutes;
-  uint8_t    Hours;
-  uint8_t    Flag;
-  uint8_t    Day;
-  uint8_t    Month;
-  uint8_t    Year;
-  uint8_t    Century;
-} __attribute__((packed));
+using repairtype_t = uint16_t;
+using repairentrynum_t = uint16_t;
+using socnum_t = uint16_t;
+using repairresult_t = uint16_t;
+//using payload_t = std::array<uint16_t, PAYLOAD_SIZE>;
+//using pprdata_in_t = std::tuple<repairentrynum_t, repairtype_t, socnum_t, payload_t>;
 
-typedef struct error_time_stamp ERROR_TIME_STAMP;
+using ppr_data =
+sdbusplus::xyz::openbmc_project::PostPackageRepair::server::PprData;
+using delete_all =
+sdbusplus::xyz::openbmc_project::Collection::server::DeleteAll;
 
+struct childPprData: sdbusplus::server::object_t<ppr_data, delete_all> {
+	childPprData(sdbusplus::bus::bus &bus, const char *path, EventPtr &event) :
+			sdbusplus::server::object_t<ppr_data, delete_all>(bus, path), bus(
+					bus), event(event) {
+		m_pprIndex = 0;
+		sd_journal_print(LOG_ERR, "PPR Data Constructor - Check \n");
+
+	}
+
+	~childPprData() {
+	}
+
+	void deleteAll() override;
+	/** Set values of repair data */
+	bool setPostPackageRepairData(uint16_t repairEntryNum, uint16_t repairType,
+			uint16_t socNum, std::vector<uint16_t> payload) override;
+
+	/** Start run time post package repair */
+	uint32_t startRuntimeRepair(uint16_t repairSlot) override;
+
+	/** Get status of repair */
+	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> getPostPackageRepairStatus(
+			uint16_t index) override;
+
+	/** Set value of RecordAdd */
+	virtual bool recordAdd(bool value) override;
+
+//    void scheduled_flush();
+private:
+	sdbusplus::bus::bus &bus;
+	EventPtr &event;
+
+	std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprData;
+
+	uint32_t updateRuntimeRepairStatus(uint16_t repairSlot);
+
+	uint16_t m_pprIndex;
+};
