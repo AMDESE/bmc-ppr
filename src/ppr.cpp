@@ -46,11 +46,14 @@ bool childPprData::recordAdd(bool value) {
 	return PprData::recordAdd(value, false);
 }
 
-std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> childPprData::getPostPackageRepairStatus(
-		uint16_t index) {
+std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+	std::vector<uint16_t>> childPprData::getPostPackageRepairData(
+	uint16_t index) {
+
 	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> tup;
+
 	sd_journal_print(LOG_DEBUG,
-			"childPprData::getPostPackageRepairStatus() - Begin \n");
+			"getPostPackageRepairData() - Begin \n");
 
 	if (index < MAX_REPAIR_SLOTS) {
 		std::vector<uint16_t> vec;
@@ -61,7 +64,7 @@ std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> childP
 		}
 
 		sd_journal_print(LOG_DEBUG,
-				"childPprData::getPostPackageRepairStatus(): repairEntryNum = %d, repairType = %d, socNum = %d, repairResult = 0x%x\n",
+				"getPostPackageRepairdata(): repairEntryNum = %d, repairType = %d, socNum = %d, repairResult = 0x%x\n",
 				m_pprData[index].repairEntryNum, m_pprData[index].repairType,
 				m_pprData[index].socNum, m_pprData[index].repairResult);
 
@@ -71,9 +74,23 @@ std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> childP
 
 	}
 	sd_journal_print(LOG_DEBUG,
-			"childPprData::getPostPackageRepairStatus() - End \n");
-	return tup;
+			"getPostPackageRepairData() - End \n");
 
+	return tup;
+}
+
+std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+        std::vector<uint16_t>>> childPprData::getPostPackageRepairStatus() {
+
+	std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>> Finalvec;
+	sd_journal_print(LOG_DEBUG,	"childPprData::getPostPackageRepairStatus() - Begin \n");
+
+	for (uint16_t index = 0; index < PprData::currentRepairEntry(); index++) {
+		Finalvec.push_back(getPostPackageRepairData(index));
+	}
+
+	sd_journal_print(LOG_DEBUG," Size of vector : %d \n",Finalvec.size());
+	return Finalvec;
 }
 
 uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot) {
