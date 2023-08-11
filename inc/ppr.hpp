@@ -118,8 +118,8 @@ struct childPprData: sdbusplus::server::object_t<ppr_data, delete_all> {
 	uint32_t startRuntimeRepair(uint16_t repairSlot) override;
 
 	/** Get status of repair */
-	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> getPostPackageRepairStatus(
-			uint16_t index) override;
+	std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+		std::vector<uint16_t>>> getPostPackageRepairStatus() override;
 
 	/** Set value of RecordAdd */
 	virtual bool recordAdd(bool value) override;
@@ -132,6 +132,10 @@ private:
 	std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprData;
 
 	uint32_t updateRuntimeRepairStatus(uint16_t repairSlot);
+
+	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+		std::vector<uint16_t>> getPostPackageRepairData(
+		uint16_t index);
 
 	uint16_t m_pprIndex;
 };
