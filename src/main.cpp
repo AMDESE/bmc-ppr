@@ -1,10 +1,29 @@
 #include "ppr.hpp"
 
+void CreatePprDir()
+{
+        int dir;
+        struct stat buffer;
+
+        if (stat(kPprDir.data(), &buffer) != 0) {
+                //PPR Dir does not exist, create it
+                dir = mkdir(kPprDir.data(), 0777);
+                if(dir != 0) {
+                        sd_journal_print(LOG_ERR, "PPR directory not created\n");
+                }
+                else {
+                        sd_journal_print(LOG_ERR, "New PPR directory was created\n");
+                }
+        }
+}
 int main() {
 
 	int ret = 0;
 
 	sd_event *event = nullptr;
+
+	CreatePprDir();
+
 	ret = sd_event_default(&event);
 	if (ret < 0) {
 		sd_journal_print(LOG_ERR, "Error creating a default sd_event handler");
