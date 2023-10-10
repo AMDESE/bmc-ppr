@@ -3,30 +3,52 @@
 void childPprData::deleteAll() {
 	sd_journal_print(LOG_ERR,
 			"Delete Action not permitted for Post Package Repair Entries \n");
-
 }
 
 bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
 		uint16_t repairType, uint16_t socNum, std::vector<uint16_t> payload) {
-	m_pprData[m_pprIndex].repairEntryNum = repairEntryNum;
-	sd_journal_print(LOG_DEBUG, "repairEntryNum = %d \n",
-			m_pprData[m_pprIndex].repairEntryNum);
-
-	m_pprData[m_pprIndex].repairType = repairType;
-	sd_journal_print(LOG_DEBUG, "repairType = %d \n",
-			m_pprData[m_pprIndex].repairType);
-
-	m_pprData[m_pprIndex].socNum = socNum;
-	sd_journal_print(LOG_DEBUG, "socNum = %d \n", m_pprData[m_pprIndex].socNum);
-
 	std::vector<uint16_t>::iterator it;
 	int i = 0;
 
-	for (it = payload.begin(); it != payload.end(); it++) {
-		m_pprData[m_pprIndex].payload[i] = *it;
-		sd_journal_print(LOG_DEBUG, "payload[%d] = %x \n", i,
-				m_pprData[m_pprIndex].payload[i]);
-		i++;
+	if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0) {
+		if (m_currentRuntimeCnt == 0) {
+			m_currentRuntimeIndex = m_pprRuntimeIndex;
+		}
+		m_currentRuntimeCnt++;
+		if (m_currentRuntimeCnt > MAX_CURRENT_Runtime_PPR) {
+			sd_journal_print(LOG_INFO, "setPPRData: Reach Max Runtime Curr Cnt = %d , Curr Index = %d",
+                                m_currentRuntimeCnt, m_currentRuntimeIndex);
+			return false;
+		}
+		sd_journal_print(LOG_INFO, "setPPRData: Runtime Curr Cnt = %d , Curr Index = %d  Index = %d Entry Num = %d\n",
+                                m_currentRuntimeCnt, m_currentRuntimeIndex, m_pprRuntimeIndex, repairEntryNum);
+		m_pprRuntimeData[m_pprRuntimeIndex].repairResult = PPR_STATUS_REPAIR_NOT_PROCESSED;
+		m_pprRuntimeData[m_pprRuntimeIndex].repairEntryNum = repairEntryNum;
+		m_pprRuntimeData[m_pprRuntimeIndex].repairType = repairType;
+		m_pprRuntimeData[m_pprRuntimeIndex].socNum = socNum;
+		for (it = payload.begin(); it != payload.end(); it++) {
+			m_pprRuntimeData[m_pprRuntimeIndex].payload[i] = *it;
+			i++;
+		}
+		if ((m_pprRuntimeIndex + m_pprBoottimeIndex) < MAX_REPAIR_SLOTS)
+		{
+			m_pprRuntimeIndex++;
+		}
+	}
+	else {
+		sd_journal_print(LOG_INFO, "setPPRData: Boottime Entry Num = %d, Index = %d \n", repairEntryNum, m_pprBoottimeIndex);
+		m_pprBoottimeData[m_pprBoottimeIndex].repairResult = PPR_STATUS_REPAIR_NOT_PROCESSED;
+		m_pprBoottimeData[m_pprBoottimeIndex].repairEntryNum = repairEntryNum;
+		m_pprBoottimeData[m_pprBoottimeIndex].repairType = repairType;
+		m_pprBoottimeData[m_pprBoottimeIndex].socNum = socNum;
+		for (it = payload.begin(); it != payload.end(); it++) {
+			m_pprBoottimeData[m_pprBoottimeIndex].payload[i] = *it;
+			i++;
+		}
+		if ((m_pprRuntimeIndex + m_pprBoottimeIndex) < MAX_REPAIR_SLOTS)
+		{
+			m_pprBoottimeIndex++;
+		}
 	}
 
 	return true;
@@ -34,47 +56,81 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
 
 bool childPprData::recordAdd(bool value) {
 	if (value == true) {
-		if (m_pprIndex < MAX_REPAIR_SLOTS)
-			m_pprIndex++;
-
-		PprData::currentRepairEntry(m_pprIndex);
-		sd_journal_print(LOG_INFO, "Record Added. CurrentRepairEntry = %d \n",
-				PprData::currentRepairEntry());
+		PprData::currentRepairEntry(m_pprRuntimeIndex);
+		sd_journal_print(LOG_INFO, "Record Added. Runtime Curr Cnt = %d , Curr Index = %d  Index = %d \n",
+				 m_currentRuntimeCnt, m_currentRuntimeIndex, m_pprRuntimeIndex);
 		value = false;
 
 	}
 	return PprData::recordAdd(value, false);
 }
 
+uint16_t childPprData::GetBoottimeIndex(void)
+{
+	return m_pprBoottimeIndex;
+}
+
+uint16_t childPprData::GetRuntimeIndex(void)
+{
+        return m_pprRuntimeIndex;
+}
+
 std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
-	std::vector<uint16_t>> childPprData::getPostPackageRepairData(
-	uint16_t index) {
+	std::vector<uint16_t>> childPprData::getRuntimeData(uint16_t index, uint16_t slot)
+{
 
 	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> tup;
 
-	sd_journal_print(LOG_DEBUG,
-			"getPostPackageRepairData() - Begin \n");
+	sd_journal_print(LOG_INFO, "getRuntimeData: - Begin , Index = %d, Slot = %d\n", index, slot);
+
+	std::vector<uint16_t> vec;
+
+	if((m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_NOT_PROCESSED) &&
+	   (slot < MAX_REPAIR_SLOTS))
+		updateRuntimeRepairStatus(index, slot);
+
+	for (int i = 0; i < PAYLOAD_SIZE; i++)
+		vec.push_back(m_pprRuntimeData[index].payload[i]);
+
+	sd_journal_print(LOG_INFO,
+		"getRuntimeData(): Index = %d, repairEntryNum = %d, repairType = %d, socNum = %d, repairResult = 0x%x\n",
+		index, m_pprRuntimeData[index].repairEntryNum, m_pprRuntimeData[index].repairType,
+		m_pprRuntimeData[index].socNum, m_pprRuntimeData[index].repairResult);
+
+	tup = std::make_tuple(m_pprRuntimeData[index].repairEntryNum,
+		m_pprRuntimeData[index].repairType, m_pprRuntimeData[index].socNum,
+		m_pprRuntimeData[index].repairResult, vec);
+
+	sd_journal_print(LOG_INFO, "getRuntimeData: - End \n");
+
+	return tup;
+}
+
+std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+        std::vector<uint16_t>> childPprData::getBoottimeData(uint16_t index)
+{
+
+	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>> tup;
+
+	sd_journal_print(LOG_INFO, "getBoottimeData: - Begin , Index = %d\n", index);
 
 	if (index < MAX_REPAIR_SLOTS) {
 		std::vector<uint16_t> vec;
-		updateRuntimeRepairStatus(index);
 
 		for (int i = 0; i < PAYLOAD_SIZE; i++) {
-			vec.push_back(m_pprData[index].payload[i]);
+			vec.push_back(m_pprBoottimeData[index].payload[i]);
 		}
 
-		sd_journal_print(LOG_DEBUG,
-				"getPostPackageRepairdata(): repairEntryNum = %d, repairType = %d, socNum = %d, repairResult = 0x%x\n",
-				m_pprData[index].repairEntryNum, m_pprData[index].repairType,
-				m_pprData[index].socNum, m_pprData[index].repairResult);
+		sd_journal_print(LOG_INFO,
+                                "getBoottimeData(): repairEntryNum = %d, repairType = %d, socNum = %d, repairResult = 0x%x\n",
+                                m_pprBoottimeData[index].repairEntryNum, m_pprBoottimeData[index].repairType,
+                                m_pprBoottimeData[index].socNum, m_pprBoottimeData[index].repairResult);
 
-		tup = std::make_tuple(m_pprData[index].repairEntryNum,
-				m_pprData[index].repairType, m_pprData[index].socNum,
-				m_pprData[index].repairResult, vec);
-
+		tup = std::make_tuple(m_pprBoottimeData[index].repairEntryNum,
+                                m_pprBoottimeData[index].repairType, m_pprBoottimeData[index].socNum,
+                                m_pprBoottimeData[index].repairResult, vec);
 	}
-	sd_journal_print(LOG_DEBUG,
-			"getPostPackageRepairData() - End \n");
+	sd_journal_print(LOG_INFO, "getBoottimeData: - End \n");
 
 	return tup;
 }
@@ -83,13 +139,22 @@ std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
         std::vector<uint16_t>>> childPprData::getPostPackageRepairStatus() {
 
 	std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>> Finalvec;
-	sd_journal_print(LOG_DEBUG,	"childPprData::getPostPackageRepairStatus() - Begin \n");
+	uint16_t slot = 0;
+	sd_journal_print(LOG_INFO,	"childPprData::getPostPackageRepairStatus() - Begin \n");
 
 	for (uint16_t index = 0; index < PprData::currentRepairEntry(); index++) {
-		Finalvec.push_back(getPostPackageRepairData(index));
+		if(m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_NOT_PROCESSED) {
+			Finalvec.push_back(getRuntimeData(index, slot));
+			slot++;
+		}
+		else
+			Finalvec.push_back(getRuntimeData(index, MAX_REPAIR_SLOTS));
+
+	}
+	for (uint16_t index = 0; index < GetBoottimeIndex(); index++) {
+		Finalvec.push_back(getBoottimeData(index));
 	}
 
-	sd_journal_print(LOG_DEBUG," Size of vector : %d \n",Finalvec.size());
 	return Finalvec;
 }
 
@@ -99,75 +164,91 @@ uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot) {
 	struct set_ras_action_data_in Data;
 	uint16_t retryCount = MAX_RETRIES;
 	uint32_t status;
+	uint16_t slot;
 
-	sd_journal_print(LOG_DEBUG, "childPprData::startRuntimeRepair() - Begin \n");
-	for (offset = 0; offset < PAYLOAD_SIZE; offset++) {
-		Data.payload.repair_entry_num = m_pprData[repairSlot].repairEntryNum;
-		Data.payload.offset = offset * 2;
-		Data.payload.pay_load = m_pprData[repairSlot].payload[offset];
-		Data.ras_act_id = RAS_ACTION_ID_RUNTIME_PPR;
+	sd_journal_print(LOG_INFO, "startRuntimeRepair: Slot = %d Runtime Curr Cnt = %d\n", repairSlot, m_currentRuntimeCnt);
+	if (repairSlot < m_currentRuntimeCnt) {
+		slot = repairSlot + m_currentRuntimeIndex;
+		sd_journal_print(LOG_INFO, "startRuntimeRepair: Begin Runtime Repair for Slot = %d\n", slot);
+		for (offset = 0; offset < PAYLOAD_SIZE; offset++) {
+			Data.payload.repair_entry_num = repairSlot;
+			Data.payload.offset = offset * 2;
+			Data.payload.pay_load = m_pprRuntimeData[slot].payload[offset];
+			Data.ras_act_id = RAS_ACTION_ID_RUNTIME_PPR;
 
-		Data.eom_flag = 0;
-		if (offset == (PAYLOAD_SIZE - 1)) {
-			Data.eom_flag = 1;
-		}
+			Data.eom_flag = 0;
+			if ((offset == (PAYLOAD_SIZE - 1)) &&
+			   ((m_currentRuntimeCnt - repairSlot) == 1))
+				Data.eom_flag = 1;
 
-		ret_oob = OOB_MAILBOX_ERR_END;
-		while (retryCount > 0) {
-			ret_oob = set_bmc_ras_action_status(m_pprData[repairSlot].socNum,
-					Data, &status);
+			ret_oob = OOB_MAILBOX_ERR_END;
+			while (retryCount > 0) {
+				ret_oob = set_bmc_ras_action_status(m_pprRuntimeData[slot].socNum, Data, &status);
 
-			if (ret_oob == OOB_SUCCESS) {
-				sd_journal_print(LOG_INFO,
+				if (ret_oob == OOB_SUCCESS) {
+					sd_journal_print(LOG_INFO,
 						"set_bmc_ras_action_status = 0x%x \n", status);
-				break;
-			}
+					break;
+				}
 
-			retryCount--;
-			sd_journal_print(LOG_WARNING,
+				retryCount--;
+				sd_journal_print(LOG_WARNING,
 					"Set RAS Action PPR Runtime failed. Repair Slot=%d, RetryCount=%d \n",
 					repairSlot, retryCount);
+			}
 		}
-	}
 
-	sd_journal_print(LOG_DEBUG, "childPprData::startRuntimeRepair() - End \n");
+		sd_journal_print(LOG_INFO, "childPprData::startRuntimeRepair() - End \n");
+	}
+	else {
+		// Boottime PPR
+		ret_oob = OOB_SUCCESS;
+	}
 	return ret_oob;
 }
 
-uint32_t childPprData::updateRuntimeRepairStatus(uint16_t repairSlot) {
+uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot) {
 
 	struct get_ras_action_data_in Data;
 	struct ras_action_status status;
 	uint16_t retryCount = MAX_RETRIES;
 	oob_status_t ret_oob;
 
-	sd_journal_print(LOG_ERR,
-			"childPprData::updateRuntimeRepairStatus() - Begin \n");
-	Data.pay_load.repair_entry_num = m_pprData[repairSlot].repairEntryNum;
-	Data.ras_action_id = RAS_ACTION_ID_RUNTIME_PPR;
+	sd_journal_print(LOG_INFO, "updateRuntimeRepairStatus: Index = %d Slot = %d Curr Cnt = %d\n", index, slot, m_currentRuntimeCnt);
+	if (slot < m_currentRuntimeCnt) {
+		sd_journal_print(LOG_INFO, "updateRuntimeRepairStatus: Begin Runtime Slot = %d \n", slot);
+		Data.pay_load.repair_entry_num = slot;
+		Data.ras_action_id = RAS_ACTION_ID_RUNTIME_PPR;
 
-	ret_oob = OOB_MAILBOX_ERR_END;
-	while (retryCount > 0) {
-		ret_oob = get_bmc_ras_action_status(m_pprData[repairSlot].socNum, Data,
+		ret_oob = OOB_MAILBOX_ERR_END;
+		while (retryCount > 0) {
+			ret_oob = get_bmc_ras_action_status(m_pprRuntimeData[index].socNum, Data,
 				&status);
 
-		if (ret_oob == OOB_SUCCESS) {
-			m_pprData[repairSlot].repairResult = status.repair_result;
-			sd_journal_print(LOG_INFO,
-					"get_bmc_ras_action_status Repair Entry = 0x%x, Repair Result = 0x%x \n",
-					status.repair_entry_num, status.repair_result);
+			if (ret_oob == OOB_SUCCESS) {
+				m_pprRuntimeData[index].repairResult = status.repair_result;
+				sd_journal_print(LOG_INFO,
+					"get_bmc_ras_action_status Repair Index = %d Slot = %d, Repair Result = 0x%x \n",
+					index, slot, status.repair_result);
+				if ((m_currentRuntimeCnt - slot) == 1)
+					m_currentRuntimeCnt = 0;
 
-			break;
+				break;
+			}
+			usleep(200 * 1000);
+			retryCount--;
+			sd_journal_print(LOG_WARNING,
+				"Get RAS Action PPR Runtime Status failed. Index = %d Slot = %d  RetryCount = %d \n",
+				index, slot, retryCount);
 		}
-		usleep(1000 * 1000);
-		retryCount--;
-		sd_journal_print(LOG_WARNING,
-				"Set RAS Action PPR Runtime failed. Index = %d, RetryCount = %d \n",
-				repairSlot, retryCount);
-	}
 
-	sd_journal_print(LOG_DEBUG,
+		sd_journal_print(LOG_INFO,
 			"childPprData::updateRuntimeRepairStatus() - End \n");
+	}
+	else
+	{   // Boot Time PPR
+		ret_oob = OOB_SUCCESS;
+	}
 	return ret_oob;
 }
 
