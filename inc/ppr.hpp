@@ -29,6 +29,15 @@
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/PostPackageRepair/PprData/server.hpp>
 
+#include <filesystem>
+#include <fstream>
+#include <string_view>
+#include <utility>
+#include <regex>
+#include <ctype.h>
+#include <nlohmann/json.hpp>
+#include <experimental/filesystem>
+
 extern "C" {
 #include <sys/stat.h>
 #include "linux/i2c-dev.h"
@@ -40,10 +49,13 @@ extern "C" {
 #include "esmi_mailbox_nda.h"
 }
 
+constexpr std::string_view kPprDir = "/var/lib/amd-ppr/";
+
 const int MAX_RETRIES = 10;
 const int RAS_ACTION_ID_RUNTIME_PPR = 0;
 const int PAYLOAD_SIZE = 10;
 const int MAX_REPAIR_SLOTS = 64;
+const int MAX_CURRENT_Runtime_PPR = 8;
 
 // PPR Service
 
@@ -51,8 +63,19 @@ const static constexpr char *pprDataInPath =
 		"/xyz/openbmc_project/PostPackageRepair/PprData";
 const static constexpr char *PropertiesIntf = "org.freedesktop.DBus.Properties";
 
+#define PPR_TYPE_RUNTIME_MASK    (0x00)
+#define PPR_TYPE_BOOTTIME_MASK   (0x8000)
+#define PPR_TYPE_SOFT_MASK       (0x00)
+#define PPR_TYPE_HARD_MASK       (0x01)
+#define PPR_TYPE_MBIST_MASK      (0x03)
+
 enum REPAIRTYPE {
-	runtime = RAS_ACTION_ID_RUNTIME_PPR, boot = 1,
+	PPR_TYPE_RUNTIME_SOFT   = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_SOFT_MASK),
+	PPR_TYPE_RUNTIME_HARD   = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_HARD_MASK),
+	PPR_TYPE_RUNTIME_MBIST  = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_MBIST_MASK),
+	PPR_TYPE_BOOTTIME_SOFT  = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_SOFT_MASK),
+	PPR_TYPE_BOOTTIME_HARD  = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_HARD_MASK),
+	PPR_TYPE_BOOTTIME_MBIST = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_MBIST_MASK),
 };
 
 // cmd 0x67 Get PPR RAS Action Status
@@ -67,6 +90,7 @@ enum PPR_STATUS {
 	PPR_STATUS_REPAIR_CHANNEL_INVALID_ERROR = 0x20,
 	PPR_STATUS_REPAIR_DEVICE_INVALID_ERROR = 0x40,
 	PPR_STATUS_REPAIR_DEVICE_MISMATCH_ERROR = 0x80,
+	PPR_STATUS_REPAIR_NOT_PROCESSED = 256,
 };
 
 //PPR File
@@ -98,12 +122,16 @@ using delete_all =
 sdbusplus::xyz::openbmc_project::Collection::server::DeleteAll;
 
 struct childPprData: sdbusplus::server::object_t<ppr_data, delete_all> {
+
 	childPprData(sdbusplus::bus::bus &bus, const char *path, EventPtr &event) :
 			sdbusplus::server::object_t<ppr_data, delete_all>(bus, path), bus(
 					bus), event(event) {
-		m_pprIndex = 0;
-		sd_journal_print(LOG_ERR, "PPR Data Constructor - Check \n");
 
+		m_pprRuntimeIndex  = 0;
+		m_currentRuntimeIndex = 0;
+		m_currentRuntimeCnt = 0;
+		m_pprBoottimeIndex = 0;
+		sd_journal_print(LOG_ERR, "PPR Data Constructor - Check \n");
 	}
 
 	~childPprData() {
@@ -123,19 +151,23 @@ struct childPprData: sdbusplus::server::object_t<ppr_data, delete_all> {
 
 	/** Set value of RecordAdd */
 	virtual bool recordAdd(bool value) override;
-
+	uint16_t GetRuntimeIndex(void);
+	uint16_t GetBoottimeIndex(void);
+	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+		std::vector<uint16_t>> getRuntimeData(uint16_t index, uint16_t slot);
+	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
+		std::vector<uint16_t>> getBoottimeData(uint16_t index);
 //    void scheduled_flush();
 private:
 	sdbusplus::bus::bus &bus;
 	EventPtr &event;
 
-	std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprData;
+	std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprRuntimeData;
+	std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprBoottimeData;
 
-	uint32_t updateRuntimeRepairStatus(uint16_t repairSlot);
-
-	std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
-		std::vector<uint16_t>> getPostPackageRepairData(
-		uint16_t index);
-
-	uint16_t m_pprIndex;
+	uint32_t updateRuntimeRepairStatus(uint16_t index, uint16_t slot);
+	uint16_t m_pprRuntimeIndex;
+	uint16_t m_currentRuntimeIndex;
+	uint16_t m_currentRuntimeCnt;
+	uint16_t m_pprBoottimeIndex;
 };
