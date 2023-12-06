@@ -42,7 +42,8 @@ deps = [
 executable(
   'amd-bmc-ppr',
   'src/main.cpp',
-  'src/ppr.cpp',
+  'src/rt_ppr.cpp',
+  'src/bt_ppr.cpp',
   include_directories: include_directories('inc'),
   cpp_args: cpp_args,
   dependencies: deps,
