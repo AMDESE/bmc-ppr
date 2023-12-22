@@ -6,40 +6,112 @@ void childPprData::WritePprFile(int index, uint16_t repairEntryNum,
                                 uint16_t repairType, uint16_t socNum,
                                 std::vector<uint16_t> payload)
 {
-    std::string pprFile;
-
+    std::string pprType;
     if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
-        pprFile = kPprDir.data() + getPprRuntimeFilename((int)index);
+       pprType = RUNTIME;
     else
-        pprFile = kPprDir.data() + getPprBoottimeFilename((int)index);
+       pprType = BOOTTIME;
 
-    nlohmann::json jsonPpr = {{"repairEntryNum", repairEntryNum},
-                              {"repairType", repairType},
-                              {"socNum", socNum},
-                              {"repairResult", PPR_STATUS_REPAIR_NOT_PROCESSED},
-                              {"payload", payload}};
-    std::ofstream jsonWrite(pprFile);
-    jsonWrite << jsonPpr;
-    jsonWrite.close();
+    try
+    {
+       if (vecPprJsonData.size() > 0)
+       {
+          //check if index exist
+          for (int vecIndex = 0; vecIndex < (int)vecPprJsonData.size(); vecIndex++)
+          {
+              if (vecPprJsonData.at(vecIndex).index == index && vecPprJsonData.at(vecIndex).pprType == pprType)
+              {
+                 sd_journal_print(LOG_DEBUG, "PPR Data already exist for processing \n");
+                 return;
+              }
+          }
+       }
+
+       PprJsonData pprObj;
+       pprObj.index = index;
+       pprObj.pprType = pprType;
+       pprObj.repairEntryNum = repairEntryNum;
+       pprObj.repairType = repairType;
+       pprObj.socNum = socNum;
+       pprObj.payload = payload;
+       //add ppr data in vector
+       vecPprJsonData.push_back(pprObj);
+       //create json file - can be optimize to create file only before BMC power cycle
+       char filepath[] = PPRJsonFileName;
+       if (fs::exists(filepath))
+       {
+          std::remove(filepath);
+          sleep(1);
+       }
+       std::ofstream output(PPR_DIR  PPRJSON_FILE);
+       cereal::JSONOutputArchive oarchive(output);
+       oarchive(cereal::make_nvp(PPR_NODE, vecPprJsonData));
+    }
+    catch (cereal::Exception& e)
+    {
+       sd_journal_print(LOG_DEBUG, "Failed to write json file  %s \n", e.what());
+    }
 }
 
 void childPprData::UpdatePprResult(int index, uint16_t repairResult,
                                    uint16_t repairType)
 {
-    std::string pprFile;
-
+    std::string pprType;
     if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
-        pprFile = kPprDir.data() + getPprRuntimeFilename((int)index);
+       pprType = RUNTIME;
     else
-        pprFile = kPprDir.data() + getPprBoottimeFilename((int)index);
-    std::ifstream jsonRead(pprFile);
-    nlohmann::json data = nlohmann::json::parse(jsonRead);
+       pprType = BOOTTIME;
 
-    data["repairResult"] = repairResult;
-    std::ofstream jsonWrite(pprFile);
-    jsonWrite << data;
-    jsonRead.close();
-    jsonWrite.close();
+    try
+    {
+       if (vecPprJsonData.size() > 0)
+       {
+          //check if index exist
+          for (int vecIndex = 0; vecIndex < (int)vecPprJsonData.size(); vecIndex++)
+          {
+              if (vecPprJsonData.at(vecIndex).index == index && vecPprJsonData.at(vecIndex).pprType == pprType)
+              {
+                 vecPprJsonData.at(vecIndex).repairResult = repairResult;
+                 break;
+              }
+          }
+       }
+
+       //create json file
+       char filepath[] = PPRJsonFileName;
+       if (fs::exists(filepath))
+       {
+          std::remove(filepath);
+          sleep(1);
+       }
+       std::ofstream output(PPR_DIR  PPRJSON_FILE);
+       cereal::JSONOutputArchive oarchive(output);
+       oarchive(cereal::make_nvp(PPR_NODE, vecPprJsonData));
+    }
+    catch (cereal::Exception& e)
+    {
+       sd_journal_print(LOG_DEBUG, "Failed to write json file  %s \n", e.what());
+    }
+
+}
+
+void childPprData::jsonRead()
+{
+     char filepath[] = PPRJsonFileName;
+     if (fs::exists(filepath))
+     {
+        try
+        {
+           std::ifstream input(PPR_DIR  PPRJSON_FILE);
+           cereal::JSONInputArchive archive(input);
+           archive(vecPprJsonData);
+
+        }
+        catch (cereal::Exception& e)
+        {
+          sd_journal_print(LOG_ERR, "Error reading ppr json file %s \n", e.what());
+        }
+     }
 }
 
 void childPprData::deleteAll()
@@ -49,76 +121,30 @@ void childPprData::deleteAll()
         "Delete Action not permitted for Post Package Repair Entries \n");
 }
 
-void childPprData::updateBTfromBoottimeRepair()
+void childPprData::updateBTfromCache()
 {
-    int i;
-    std::string pprFile;
-    struct stat buffer;
     uint16_t result, repairEntryNum, repairType, socNum;
     std::vector<uint16_t> payload;
 
-    for (i = 0; i < MAX_REPAIR_SLOTS; i++)
+    if (vecPprJsonData.size() > 0)
     {
-        memset(&buffer, 0, sizeof(buffer));
-        pprFile = kPprDir.data() + getPprBoottimeFilename(i);
-        if (stat(pprFile.c_str(), &buffer) == 0)
-        {
-            sd_journal_print(LOG_INFO,
-                             "updateBTfromBoottimeRepair: File %s exist",
-                             pprFile.c_str());
-            std::ifstream jsonRead(pprFile);
-            nlohmann::json data = nlohmann::json::parse(jsonRead);
-            result = data["repairResult"];
-            if (result == PPR_STATUS_REPAIR_NOT_PROCESSED)
-            {
-                repairEntryNum = data["repairEntryNum"];
-                repairType = data["repairType"];
-                socNum = data["socNum"];
-                payload = data.at("payload").get<std::vector<uint16_t>>();
-                globalBT->setBTdata(repairEntryNum, repairType, socNum, result,
-                                    payload);
-            }
-        }
-    }
-    sd_journal_print(LOG_INFO, "updateBTfromBoottimeRepair: PPR BT Index = %d ",
-                     globalBT->getBTindex());
-}
+       //check if index exist
+       for (int vecIndex = 0; vecIndex < (int)vecPprJsonData.size(); vecIndex++)
+       {
+           result = vecPprJsonData.at(vecIndex).repairResult;
+           if (result == PPR_STATUS_REPAIR_NOT_PROCESSED || result == PPR_STATUS_REPAIR_PASS)
+           {
+              repairEntryNum = vecPprJsonData.at(vecIndex).repairEntryNum;
+              repairType = vecPprJsonData.at(vecIndex).repairType;
+              socNum = vecPprJsonData.at(vecIndex).socNum;
+              payload = vecPprJsonData.at(vecIndex).payload;
 
-void childPprData::updateBTfromRuntimeRepair()
-{
-    int i;
-    std::string pprFile;
-    struct stat buffer;
-    uint16_t result, repairEntryNum, repairType, socNum;
-    std::vector<uint16_t> payload;
-
-    for (i = 0; i < MAX_REPAIR_SLOTS; i++)
-    {
-        memset(&buffer, 0, sizeof(buffer));
-        pprFile = kPprDir.data() + getPprRuntimeFilename(i);
-        if (stat(pprFile.c_str(), &buffer) == 0)
-        {
-            sd_journal_print(LOG_INFO,
-                             "updateBTfromRuntimeRepair: File %s exist",
-                             pprFile.c_str());
-            std::ifstream jsonRead(pprFile);
-            nlohmann::json data = nlohmann::json::parse(jsonRead);
-            result = data["repairResult"];
-            if (result == PPR_STATUS_REPAIR_PASS)
-            {
-                repairEntryNum = data["repairEntryNum"];
-                repairType = data["repairType"];
-                socNum = data["socNum"];
-                payload = data.at("payload").get<std::vector<uint16_t>>();
-                globalBT->setBTdata(repairEntryNum, repairType, socNum, result,
+              globalBT->setBTdata(repairEntryNum, repairType, socNum, result,
                                     payload);
-            }
-        }
+           }
+       }
     }
-    sd_journal_print(
-        LOG_INFO,
-        "updateBTfromRuntimeRepair: PPR BT Index = %d, PPR RT Index = %d",
-        globalBT->getBTindex(), m_pprRuntimeIndex);
+    sd_journal_print(LOG_INFO, "update from Repair: PPR BT Index = %d ", globalBT->getBTindex());
 }
 
 bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,

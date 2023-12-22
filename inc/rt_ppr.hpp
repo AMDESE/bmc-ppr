@@ -35,6 +35,9 @@
 #include <xyz/openbmc_project/Collection/DeleteAll/server.hpp>
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/PostPackageRepair/PprData/server.hpp>
+#include <cereal/archives/json.hpp>
+#include <cereal/types/memory.hpp>
+#include <cereal/types/vector.hpp>
 
 extern "C" {
 #include <sys/stat.h>
@@ -47,7 +50,15 @@ extern "C" {
 #include "i2c/smbus.h"
 #include "linux/i2c-dev.h"
 }
+#define PPR_DIR "/var/lib/amd-ppr/"
+#define PPRJSON_FILE    "PPRData.json"
+#define PPRJsonFileName "/var/lib/amd-ppr/PPRData.json"
+#define PPR_NODE "PprData"
+#define RUNTIME "runTime"
+#define BOOTTIME "bootTime"
 
+using namespace std;
+namespace fs = std::filesystem;
 constexpr std::string_view kPprDir = "/var/lib/amd-ppr/";
 
 const int MAX_RETRIES = 10;
@@ -112,6 +123,30 @@ struct PPR_Data
     uint16_t repairResult;
     uint16_t payload[PAYLOAD_SIZE];
 };
+
+struct PprJsonData
+{
+  int  index;
+  std::string pprType;
+  uint16_t repairEntryNum;
+  uint16_t repairType;
+  uint16_t socNum;
+  uint16_t repairResult;
+  std::vector<uint16_t> payload;
+};
+
+template <typename Archive>
+void serialize(Archive& archive, PprJsonData& jsonData)
+{
+     archive(cereal::make_nvp("index", jsonData.index),
+             cereal::make_nvp("pprType", jsonData.pprType),
+             cereal::make_nvp("repairEntryNum", jsonData.repairEntryNum),
+             cereal::make_nvp("repairType", jsonData.repairType),
+             cereal::make_nvp("socNum", jsonData.socNum),
+             cereal::make_nvp("repairResult", jsonData.repairResult),
+             cereal::make_nvp("payload", jsonData.payload)
+           );
+}
 
 struct EventDeleter
 {
@@ -217,8 +252,8 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_currentRuntimeCnt = 0;
         globalBT->setBTindex(0);
         sd_journal_print(LOG_ERR, "PPR Data Constructor - Check \n");
-        updateBTfromBoottimeRepair();
-        updateBTfromRuntimeRepair();
+        jsonRead();
+        updateBTfromCache();
     }
 
     ~childPprData()
@@ -255,11 +290,11 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     EventPtr& event;
 
     std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprRuntimeData;
-
-    void updateBTfromBoottimeRepair();
-    void updateBTfromRuntimeRepair();
+    void updateBTfromCache();
     uint32_t updateRuntimeRepairStatus(uint16_t index, uint16_t slot);
     uint16_t m_pprRuntimeIndex;
     uint16_t m_currentRuntimeIndex;
     uint16_t m_currentRuntimeCnt;
+    vector <PprJsonData> vecPprJsonData;
+    void jsonRead();
 };
