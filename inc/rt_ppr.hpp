@@ -25,6 +25,9 @@
 #include <systemd/sd-journal.h>
 #include <unistd.h>
 
+#include <cereal/archives/json.hpp>
+#include <cereal/types/memory.hpp>
+#include <cereal/types/vector.hpp>
 #include <experimental/filesystem>
 #include <filesystem>
 #include <fstream>
@@ -48,6 +51,15 @@ extern "C" {
 #include "linux/i2c-dev.h"
 }
 
+#define PPR_DIR "/var/lib/amd-ppr/"
+#define PPRJSON_FILE "PPRData.json"
+#define PPRJsonFileName "/var/lib/amd-ppr/PPRData.json"
+#define PPR_NODE "PprData"
+#define RUNTIME "runTime"
+#define BOOTTIME "bootTime"
+
+using namespace std;
+namespace fs = std::filesystem;
 constexpr std::string_view kPprDir = "/var/lib/amd-ppr/";
 
 const int MAX_RETRIES = 10;
@@ -55,6 +67,18 @@ const int RAS_ACTION_ID_RUNTIME_PPR = 0;
 const int PAYLOAD_SIZE = 10;
 const int MAX_REPAIR_SLOTS = 64;
 const int MAX_CURRENT_Runtime_PPR = 8;
+const int MAX_DIMM_SLOT = 24;
+const int DIMM_SOCKET_PL_NUM = 3;
+const int DIMM_SOCKET_MASK = 0xE000;
+const int DIMM_SOCKET_SHIFT = 13;
+const int DIMM_SOCKET_0 = 0;
+const int DIMM_CH_PL_NUM = 3;
+const int DIMM_CH_MASK = 0x01E0;
+const int DIMM_CH_SHIFT = 5;
+const int DIMM_CHIP_PL_NUM = 0;
+const int DIMM_CHIP_MASK = 0x6000;
+const int DIMM_CHIP_SHIFT = 13;
+const int DIMM_CHIP_2DPC = 2;
 
 inline std::string getPprRuntimeFilename(int num)
 {
@@ -112,6 +136,29 @@ struct PPR_Data
     uint16_t repairResult;
     uint16_t payload[PAYLOAD_SIZE];
 };
+
+struct PprJsonData
+{
+    int index;
+    std::string pprType;
+    uint16_t repairEntryNum;
+    uint16_t repairType;
+    uint16_t socNum;
+    uint16_t repairResult;
+    std::vector<uint16_t> payload;
+};
+
+template <typename Archive>
+void serialize(Archive& archive, PprJsonData& jsonData)
+{
+    archive(cereal::make_nvp("index", jsonData.index),
+            cereal::make_nvp("pprType", jsonData.pprType),
+            cereal::make_nvp("repairEntryNum", jsonData.repairEntryNum),
+            cereal::make_nvp("repairType", jsonData.repairType),
+            cereal::make_nvp("socNum", jsonData.socNum),
+            cereal::make_nvp("repairResult", jsonData.repairResult),
+            cereal::make_nvp("payload", jsonData.payload));
+}
 
 struct EventDeleter
 {
@@ -216,9 +263,9 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
         globalBT->setBTindex(0);
-        sd_journal_print(LOG_ERR, "PPR Data Constructor - Check \n");
-        updateBTfromBoottimeRepair();
-        updateBTfromRuntimeRepair();
+        sd_journal_print(LOG_INFO, "PPR Data Constructor - Check \n");
+        jsonRead();
+        updateBTfromCache();
     }
 
     ~childPprData()
@@ -243,7 +290,8 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     virtual bool recordAdd(bool value) override;
     void UpdatePprResult(int index, uint16_t repairResult, uint16_t repairType);
     void WritePprFile(int index, uint16_t repairEntryNum, uint16_t repairType,
-                      uint16_t socNum, std::vector<uint16_t> payload);
+                      uint16_t socNum, uint16_t repairResult,
+                      std::vector<uint16_t> payload);
     uint16_t GetRuntimeIndex(void);
     std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
         getRuntimeData(uint16_t index, uint16_t slot);
@@ -255,11 +303,15 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     EventPtr& event;
 
     std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprRuntimeData;
-
-    void updateBTfromBoottimeRepair();
-    void updateBTfromRuntimeRepair();
+    void updateBTfromCache();
     uint32_t updateRuntimeRepairStatus(uint16_t index, uint16_t slot);
     uint16_t m_pprRuntimeIndex;
     uint16_t m_currentRuntimeIndex;
     uint16_t m_currentRuntimeCnt;
+    vector<PprJsonData> vecPprJsonData;
+    void jsonRead();
+    void SetBTfromRT(int index);
+    int GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip);
+    uint16_t DimmSN0[MAX_DIMM_SLOT];
+    uint16_t DimmSN1[MAX_DIMM_SLOT];
 };
