@@ -51,25 +51,25 @@
 #define CHAR8 unsigned char
 #define UINTN unsigned int_least8_t
 
-#define MAX_RETRY 20
-#define TSLEEP    1
+#define MAX_RETRY 600
+#define TSLEEP 2
 
-#define PPR_SM_OFFSET          0xF0000
-#define BYTE_LENGTH            16
-#define PPR_BT_HEADER_SIZE     16
-#define PPR_BT_DATA_SIZE       32
-#define MEMBAR_BUFFER_LENGTH   1000
-#define BMC_BUFFER_LENGTH      1024
-#define CMD_BUFF_LEN           10
+#define PPR_SM_OFFSET 0xF0000
+#define BYTE_LENGTH 16
+#define PPR_BT_HEADER_SIZE 16
+#define PPR_BT_DATA_SIZE 32
+#define MEMBAR_BUFFER_LENGTH 1000
+#define BMC_BUFFER_LENGTH 1024
+#define CMD_BUFF_LEN 10
 #define BOOTTIME_PPR_SIGNATURE 0x525050 // PPR
-#define BOOTTIME_PPR_VERSION   0x01
-#define BOOTTIME_PPR_TYPE      0x03
+#define BOOTTIME_PPR_VERSION 0x01
+#define BOOTTIME_PPR_TYPE 0x03
 
 #define BT_PPR_CMD_DISABLE_OOB 0x0080
-#define BT_PPR_CMD_BIOS_CNT    0x0081
-#define BT_PPR_CMD_BMC_CNT     0x0082
-#define Q2_BIOS_SIG            0x81
-#define Q2_READ_CNT            4
+#define BT_PPR_CMD_BIOS_CNT 0x0081
+#define BT_PPR_CMD_BMC_CNT 0x0082
+#define Q2_BIOS_SIG 0x81
+#define Q2_READ_CNT 4
 
 struct BiosPprHeader
 {
@@ -143,7 +143,6 @@ class BootTimePprData
     }
 
   private:
-    void* base_addr;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> pprBoottimeDataIn;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> pprBoottimeDataOut;
     UINT8 BiosInCnt;
@@ -151,7 +150,6 @@ class BootTimePprData
     bool SystemStateOn;
 
     void poolSharedMem();
-    bool ReadHostSharedMem();
     void ReadBootTimePprData(UINT8 entryCount);
     bool getBiosInData();
     UINT8 setBiosOutData();
