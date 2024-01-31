@@ -5,6 +5,7 @@
 
 static boost::asio::io_service io;
 std::shared_ptr<sdbusplus::asio::connection> conn;
+void* base_addr;
 
 void CreatePprDir()
 {
@@ -26,12 +27,59 @@ void CreatePprDir()
     }
 }
 
+// Initialize Shared Memory device
+void InitHostSharedMem()
+{
+    sd_journal_print(LOG_DEBUG, "InitHostSharedMem Start  \n");
+    base_addr = NULL;
+    size_t sdev = (MEMBAR_BUFFER_LENGTH * MEMBAR_BUFFER_LENGTH);
+    int mfd;
+    struct stat sb;
+
+    try
+    {
+        if (stat(BMC_DEV, &sb) == 0)
+        {
+            mfd = open(BMC_DEV, O_RDWR | O_SYNC);
+            base_addr =
+                mmap(0, sdev, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+            if (base_addr == MAP_FAILED)
+            {
+                sd_journal_print(
+                    LOG_ERR, "InitHostSharedMem: Error Buffer map failed  \n");
+            }
+            else
+            {
+                base_addr = (UINT8*)base_addr + PPR_SM_OFFSET;
+            }
+            close(mfd);
+        }
+        else
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "InitHostSharedMem: Error BMC Device does not exist \n");
+        }
+    }
+    catch (std::exception& e)
+    {
+        sd_journal_print(
+            LOG_ERR, "InitHostSharedMem: Error getting membar value for: %s \n",
+            e.what());
+    }
+
+    sd_journal_print(LOG_DEBUG, "InitHostSharedMem End with Base Addr = %p \n",
+                     base_addr);
+    return;
+}
+
 void ReadHostQueue2()
 {
+    BootTimePprData* btPpr = NULL;
+#ifdef BMC_DEV_IRQ
     int fd = -1;
     char buff[Q2_READ_CNT];
     ssize_t ret;
-    BootTimePprData* btPpr = NULL;
 
     while (1)
     {
@@ -67,6 +115,13 @@ void ReadHostQueue2()
         close(fd);
         sleep(1);
     } // end of while
+#else
+    if (btPpr == NULL)
+    {
+        btPpr = new BootTimePprData();
+        sd_journal_print(LOG_INFO, " ReadHostQueue2: start BT Poll \n");
+    }
+#endif
 }
 
 int main()
@@ -82,6 +137,8 @@ int main()
 
     CreatePprDir();
 
+    InitHostSharedMem();
+
     ret = sd_event_default(&event);
     if (ret < 0)
     {
@@ -94,6 +151,7 @@ int main()
     event = nullptr;
 
     sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+
     sdbusplus::server::manager_t m{bus, DBUS_OBJECT_NAME};
 
     bus.request_name(DBUS_SERVICE_NAME);
@@ -102,8 +160,8 @@ int main()
 
     sd_journal_print(LOG_DEBUG, "Created PPR Data Object \n");
 
-    std::thread h2bQ1Thread(ReadHostQueue2);
-    h2bQ1Thread.detach();
+    std::thread h2bQ2Thread(ReadHostQueue2);
+    h2bQ2Thread.detach();
 
     try
     {

@@ -2,123 +2,92 @@
 
 commonPPR* commonPPR::instance = 0;
 
-void childPprData::WritePprFile(int index, uint16_t repairEntryNum,
-                                uint16_t repairType, uint16_t socNum,
-                                std::vector<uint16_t> payload)
+int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 {
-    std::string pprFile;
+    int dimm;
 
-    if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
-        pprFile = kPprDir.data() + getPprRuntimeFilename((int)index);
+    if (Socket == DIMM_SOCKET_0)
+    { // Socket 0
+        if (Chip < DIMM_CHIP_2DPC)
+        { // 1 DPC
+            dimm = Ch;
+        }
+        else
+        { // 2 DPC
+            dimm = ((MAX_DIMM_SLOT / 2) + Ch);
+        }
+    }
     else
-        pprFile = kPprDir.data() + getPprBoottimeFilename((int)index);
+    { // socket 1
+        dimm = ((MAX_DIMM_SLOT / 2) + Ch);
+    }
 
-    nlohmann::json jsonPpr = {{"repairEntryNum", repairEntryNum},
-                              {"repairType", repairType},
-                              {"socNum", socNum},
-                              {"repairResult", PPR_STATUS_REPAIR_NOT_PROCESSED},
-                              {"payload", payload}};
-    std::ofstream jsonWrite(pprFile);
-    jsonWrite << jsonPpr;
-    jsonWrite.close();
+    // TBD, Call APML to get the DIMM SN
+    DimmSN0[dimm] = 0;
+    DimmSN1[dimm] = 0;
+
+    return dimm;
 }
 
-void childPprData::UpdatePprResult(int index, uint16_t repairResult,
-                                   uint16_t repairType)
+void childPprData::SetBTfromRT(int index)
 {
-    std::string pprFile;
+    uint16_t Socket;
+    uint16_t Ch;
+    uint16_t Chip;
+    int dimm;
+    int btIndex;
+    std::vector<uint16_t> payload;
 
-    if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
-        pprFile = kPprDir.data() + getPprRuntimeFilename((int)index);
+    Socket = ((m_pprRuntimeData[index].payload[DIMM_SOCKET_PL_NUM] &
+               DIMM_SOCKET_MASK) >>
+              DIMM_SOCKET_SHIFT);
+    Ch = ((m_pprRuntimeData[index].payload[DIMM_CH_PL_NUM] & DIMM_CH_MASK) >>
+          DIMM_CH_SHIFT);
+    Chip =
+        ((m_pprRuntimeData[index].payload[DIMM_CHIP_PL_NUM] & DIMM_CHIP_MASK) >>
+         DIMM_CHIP_SHIFT);
+    dimm = GetDimmSerialNum(Socket, Ch, Chip);
+    sd_journal_print(LOG_INFO, "setBTfromRT: DIMM = %d (%d , %d, %d)  \n", dimm,
+                     Socket, Ch, Chip);
+
+    // Copy the 1st 6 Payloads
+    for (int i = 0; i < PAYLOAD_6; i++)
+        payload.push_back(m_pprRuntimeData[index].payload[i]);
+
+    // Payload 7 and 8 are DIMM SN
+    if (dimm >= MAX_DIMM_SLOT)
+    {
+        sd_journal_print(
+            LOG_ERR, "setBTfromRT: Bad DIMM # (%d : %d %d %d) in PPR file  \n",
+            dimm, Socket, Ch, Chip);
+        payload.push_back((uint16_t)0);
+        payload.push_back((uint16_t)0);
+    }
     else
-        pprFile = kPprDir.data() + getPprBoottimeFilename((int)index);
-    std::ifstream jsonRead(pprFile);
-    nlohmann::json data = nlohmann::json::parse(jsonRead);
+    {
+        payload.push_back(DimmSN0[dimm]);
+        payload.push_back(DimmSN1[dimm]);
+        sd_journal_print(LOG_INFO, "setBTfromRT: DIMM %d SN = 0x%x 0x%x\n",
+                         dimm, DimmSN0[dimm], DimmSN1[dimm]);
+    }
+    // Payload 9 and 10 are 0 (Currently DIMM SN is only 4 bytes)
+    payload.push_back((uint16_t)0);
+    payload.push_back((uint16_t)0);
 
-    data["repairResult"] = repairResult;
-    std::ofstream jsonWrite(pprFile);
-    jsonWrite << data;
-    jsonRead.close();
-    jsonWrite.close();
+    btIndex = globalBT->getBTindex();
+    sd_journal_print(LOG_INFO, "setBTfromRT: Add Boottime Entry Index = %d \n",
+                     btIndex);
+    globalBT->setBTdata(
+        true, RUNTIME, m_pprRuntimeData[index].repairEntryNum,
+        (m_pprRuntimeData[index].repairType | PPR_TYPE_BOOTTIME_MASK),
+        m_pprRuntimeData[index].socNum, PPR_STATUS_REPAIR_NOT_PROCESSED,
+        payload);
 }
-
 void childPprData::deleteAll()
 {
     sd_journal_print(
         LOG_ERR,
         "Delete Action not permitted for Post Package Repair Entries \n");
-}
-
-void childPprData::updateBTfromBoottimeRepair()
-{
-    int i;
-    std::string pprFile;
-    struct stat buffer;
-    uint16_t result, repairEntryNum, repairType, socNum;
-    std::vector<uint16_t> payload;
-
-    for (i = 0; i < MAX_REPAIR_SLOTS; i++)
-    {
-        memset(&buffer, 0, sizeof(buffer));
-        pprFile = kPprDir.data() + getPprBoottimeFilename(i);
-        if (stat(pprFile.c_str(), &buffer) == 0)
-        {
-            sd_journal_print(LOG_INFO,
-                             "updateBTfromBoottimeRepair: File %s exist",
-                             pprFile.c_str());
-            std::ifstream jsonRead(pprFile);
-            nlohmann::json data = nlohmann::json::parse(jsonRead);
-            result = data["repairResult"];
-            if (result == PPR_STATUS_REPAIR_NOT_PROCESSED)
-            {
-                repairEntryNum = data["repairEntryNum"];
-                repairType = data["repairType"];
-                socNum = data["socNum"];
-                payload = data.at("payload").get<std::vector<uint16_t>>();
-                globalBT->setBTdata(repairEntryNum, repairType, socNum, result,
-                                    payload);
-            }
-        }
-    }
-    sd_journal_print(LOG_INFO, "updateBTfromBoottimeRepair: PPR BT Index = %d ",
-                     globalBT->getBTindex());
-}
-
-void childPprData::updateBTfromRuntimeRepair()
-{
-    int i;
-    std::string pprFile;
-    struct stat buffer;
-    uint16_t result, repairEntryNum, repairType, socNum;
-    std::vector<uint16_t> payload;
-
-    for (i = 0; i < MAX_REPAIR_SLOTS; i++)
-    {
-        memset(&buffer, 0, sizeof(buffer));
-        pprFile = kPprDir.data() + getPprRuntimeFilename(i);
-        if (stat(pprFile.c_str(), &buffer) == 0)
-        {
-            sd_journal_print(LOG_INFO,
-                             "updateBTfromRuntimeRepair: File %s exist",
-                             pprFile.c_str());
-            std::ifstream jsonRead(pprFile);
-            nlohmann::json data = nlohmann::json::parse(jsonRead);
-            result = data["repairResult"];
-            if (result == PPR_STATUS_REPAIR_PASS)
-            {
-                repairEntryNum = data["repairEntryNum"];
-                repairType = data["repairType"];
-                socNum = data["socNum"];
-                payload = data.at("payload").get<std::vector<uint16_t>>();
-                globalBT->setBTdata(repairEntryNum, repairType, socNum, result,
-                                    payload);
-            }
-        }
-    }
-    sd_journal_print(
-        LOG_INFO,
-        "updateBTfromRuntimeRepair: PPR BT Index = %d, PPR RT Index = %d",
-        globalBT->getBTindex(), m_pprRuntimeIndex);
 }
 
 bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
@@ -160,8 +129,6 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
             m_pprRuntimeData[m_pprRuntimeIndex].payload[i] = *it;
             i++;
         }
-        WritePprFile((int)m_pprRuntimeIndex, repairEntryNum, repairType, socNum,
-                     payload);
         if ((m_pprRuntimeIndex + globalBT->getBTindex()) < MAX_REPAIR_SLOTS)
         {
             m_pprRuntimeIndex++;
@@ -173,9 +140,8 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
         sd_journal_print(LOG_INFO,
                          "setPPRData: Boottime Entry Num = %d, Index = %d \n",
                          repairEntryNum, index);
-        globalBT->setBTdata(repairEntryNum, repairType, socNum,
+        globalBT->setBTdata(true, BOOTTIME, repairEntryNum, repairType, socNum,
                             PPR_STATUS_REPAIR_NOT_PROCESSED, payload);
-        WritePprFile((int)index, repairEntryNum, repairType, socNum, payload);
     }
 
     return true;
@@ -364,8 +330,6 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
             if (ret_oob == OOB_SUCCESS)
             {
                 m_pprRuntimeData[index].repairResult = status.repair_result;
-                UpdatePprResult((int)index, (uint16_t)status.repair_result,
-                                m_pprRuntimeData[index].repairType);
                 sd_journal_print(LOG_INFO,
                                  "get_bmc_ras_action_status Repair Index = %d "
                                  "Slot = %d, Repair Result = 0x%x \n",
@@ -381,6 +345,11 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
                              "Get RAS Action PPR Runtime Status failed. Index "
                              "= %d  Slot = %d  RetryCount = %d \n",
                              index, slot, retryCount);
+        }
+
+        if (m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_PASS)
+        {
+            SetBTfromRT((int)index);
         }
 
         sd_journal_print(LOG_INFO,
