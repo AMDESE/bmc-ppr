@@ -24,56 +24,12 @@
 BootTimePprDataHolder* BootTimePprDataHolder::instance = 0;
 using namespace std;
 
-// Read Shared Memory device
-bool BootTimePprData::ReadHostSharedMem()
-{
-    sd_journal_print(LOG_INFO, " ReadHostSharedMem Start  \n");
-    bool retvalue = false;
-    base_addr = NULL;
-    size_t sdev = (MEMBAR_BUFFER_LENGTH * MEMBAR_BUFFER_LENGTH);
-    int mfd;
-    struct stat sb;
-
-    try
-    {
-        if (stat(BMC_DEV, &sb) == 0)
-        {
-            mfd = open(BMC_DEV, O_RDWR | O_SYNC);
-            base_addr =
-                mmap(0, sdev, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
-            if (base_addr == MAP_FAILED)
-            {
-                sd_journal_print(LOG_ERR, "Buffer map failed  \n");
-            }
-            else
-            {
-                base_addr = (UINT8*)base_addr + PPR_SM_OFFSET;
-                retvalue = true;
-            }
-            close(mfd);
-        }
-        else
-        {
-            sd_journal_print(LOG_ERR, "BMC Device does not exist \n");
-        }
-    }
-    catch (std::exception& e)
-    {
-        sd_journal_print(LOG_ERR, "Error getting membar value for: %s \n",
-                         e.what());
-    }
-
-    sd_journal_print(LOG_INFO, " ReadHostSharedMem End Return %d Base %p \n",
-                     retvalue, base_addr);
-    return retvalue;
-}
-
 bool BootTimePprData::getBiosInData()
 {
     UINT32 Signature;
     UINT16 Command;
 
-    sd_journal_print(LOG_INFO, "getBiosInData Start");
+    sd_journal_print(LOG_DEBUG, "getBiosInData Start");
     BiosInCnt = 0;
     if (base_addr != NULL)
     {
@@ -85,14 +41,16 @@ bool BootTimePprData::getBiosInData()
             Signature = BiosPprHeader_ptr->Signature;
             BiosInCnt = BiosPprHeader_ptr->EntryCount;
             Command = BiosPprHeader_ptr->Command;
-            sd_journal_print(LOG_INFO,
-                             "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
-                             Signature, BiosInCnt, Command);
             if (Signature == BOOTTIME_PPR_SIGNATURE)
             {
+                sd_journal_print(
+                    LOG_DEBUG, "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
+                    Signature, BiosInCnt, Command);
+
                 if (Command == BT_PPR_CMD_BIOS_CNT)
                 {
                     // TBD Enable PPR OOB
+                    sd_journal_print(LOG_INFO, "getBiosInData BIOS Signature");
                     if (BiosInCnt > MAX_REPAIR_SLOTS)
                     {
                         sd_journal_print(LOG_INFO,
@@ -108,12 +66,13 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_BMC_CNT)
                 {
-                    sd_journal_print(LOG_INFO, "getBiosInData BMC Signature");
+                    sd_journal_print(LOG_DEBUG, "getBiosInData BMC Signature");
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {
                     // TBD disable PPR OOB
-                    sd_journal_print(LOG_INFO, "getBiosInData Disable PPR OOB");
+                    sd_journal_print(LOG_DEBUG,
+                                     "getBiosInData Disable PPR OOB");
                     return true;
                 }
             }
@@ -125,22 +84,29 @@ bool BootTimePprData::getBiosInData()
 
 void BootTimePprData::poolSharedMem()
 {
+#ifdef BMC_DEV_IRQ
     uint32_t retry = 0;
-    bool ret;
-    ret = ReadHostSharedMem();
-    if (ret && (base_addr != NULL))
+    if (base_addr != NULL)
     {
         while ((false == getBiosInData()) && (retry < MAX_RETRY))
         {
-            sd_journal_print(LOG_INFO,
-                             "Shared Membar is empty, retrying...%d \n", retry);
             retry++;
             sleep(TSLEEP);
         }
     }
+#else
+    if (base_addr != NULL)
+    {
+        while (1)
+        {
+            getBiosInData();
+            sleep(TSLEEP);
+        }
+    }
+#endif
     else
         sd_journal_print(LOG_ERR, "BMC_DEV Shared Membar is not available \n");
-    sd_journal_print(LOG_INFO, "poolSharedMem End \n");
+    sd_journal_print(LOG_DEBUG, "poolSharedMem End \n");
 }
 
 void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
@@ -253,7 +219,7 @@ void BootTimePprData::compareBiosData()
             {
                 pprBoottimeDataOut[i].repairResult =
                     pprBoottimeDataIn[j].repairResult;
-                globalBT->setBTresult(i, pprBoottimeDataIn[j].repairResult);
+                globalBT->UpdateBtResult(i, pprBoottimeDataIn[j].repairResult);
                 matchCnt++;
             }
         } // end of for j
