@@ -85,6 +85,12 @@ const int DIMM_CHIP_PL_NUM = 0;
 const int DIMM_CHIP_MASK = 0x6000;
 const int DIMM_CHIP_SHIFT = 13;
 const int DIMM_CHIP_2DPC = 2;
+const int DIMM_SN0_MASK = 0x0000FFFF;
+const int DIMM_SN1_MASK = 0xFFFF0000;
+const int DIMM_SN1_SHIFT = 16;
+const int DIMM_SN_CH_MASK = 0x07;
+const int DIMM_SN_CHIP_MASK = 0x03;
+const int DIMM_SN_CHIP_SHIFT = 4;
 
 // PPR Service
 const static constexpr char* pprDataInPath =

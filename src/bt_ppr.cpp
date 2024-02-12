@@ -21,6 +21,8 @@
 
 #include "iomanip"
 
+#define BMC_DEV_IRQ 1
+
 BootTimePprDataHolder* BootTimePprDataHolder::instance = 0;
 using namespace std;
 

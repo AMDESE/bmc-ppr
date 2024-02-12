@@ -3,6 +3,8 @@
 
 #include <thread>
 
+#define BMC_DEV_IRQ 1
+
 static boost::asio::io_service io;
 std::shared_ptr<sdbusplus::asio::connection> conn;
 void* base_addr;
