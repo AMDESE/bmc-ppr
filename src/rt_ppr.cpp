@@ -5,26 +5,52 @@ commonPPR* commonPPR::instance = 0;
 int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 {
     int dimm;
+    uint8_t dimmAddr;
+    uint32_t dimmData;
+    oob_status_t ret_oob;
+
+    dimm = (Ch & DIMM_SN_CH_MASK);
+    if (dimm >= MAX_DIMM_SLOT_PER_SOC)
+    {
+        return MAX_DIMM_SLOT;
+    }
+    dimmAddr = (uint8_t)(dimm + DIMM_SN_MODE_1);
 
     if (Socket == DIMM_SOCKET_0)
     { // Socket 0
-        if (Chip < DIMM_CHIP_2DPC)
-        { // 1 DPC
-            dimm = Ch;
-        }
-        else
+        if (Chip >= DIMM_CHIP_2DPC)
         { // 2 DPC
-            dimm = ((MAX_DIMM_SLOT / 2) + Ch);
+            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+            dimmAddr = dimmAddr + DIMM_SN_2DPC;
         }
     }
     else
     { // socket 1
-        dimm = ((MAX_DIMM_SLOT / 2) + Ch);
+        dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
     }
 
-    // TBD, Call APML to get the DIMM SN
-    DimmSN0[dimm] = 0;
-    DimmSN1[dimm] = 0;
+    // Call APML to get the DIMM SN
+    sd_journal_print(LOG_INFO, "GetDimmSerialNum: DIMM = %d Addr = 0x%x \n",
+                     dimm, dimmAddr);
+
+    ret_oob = get_dimm_serial_num((uint8_t)Socket, dimmAddr, &dimmData);
+    if (ret_oob == OOB_SUCCESS)
+    {
+        DimmSN0[dimm] = (uint16_t)(dimmData & DIMM_SN0_MASK);
+        DimmSN1[dimm] =
+            (uint16_t)((dimmData & DIMM_SN1_MASK) >> DIMM_SN1_SHIFT);
+        sd_journal_print(LOG_INFO,
+                         "GetDimmSerialNum: DIMM SN = 0x%x , %d, %d   \n",
+                         dimmData, DimmSN0[dimm], DimmSN1[dimm]);
+    }
+    else
+    {
+        sd_journal_print(
+            LOG_INFO, "GetDimmSerialNum: Error getting DIMM SN for %d %d  \n",
+            dimm, dimmAddr);
+        DimmSN0[dimm] = 0;
+        DimmSN1[dimm] = 0;
+    }
 
     return dimm;
 }
