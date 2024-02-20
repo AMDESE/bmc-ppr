@@ -82,7 +82,7 @@ bool BootTimePprData::getBiosInData()
     return false;
 }
 
-void BootTimePprData::poolSharedMem()
+void BootTimePprData::pollSharedMem()
 {
 #ifdef BMC_DEV_IRQ
     uint32_t retry = 0;
@@ -106,7 +106,7 @@ void BootTimePprData::poolSharedMem()
 #endif
     else
         sd_journal_print(LOG_ERR, "BMC_DEV Shared Membar is not available \n");
-    sd_journal_print(LOG_DEBUG, "poolSharedMem End \n");
+    sd_journal_print(LOG_DEBUG, "pollSharedMem End \n");
 }
 
 void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)

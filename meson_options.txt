@@ -4,3 +4,4 @@ option(
     type: 'string'
 )
 
+option('bmc_dev_irq', type : 'feature', value : 'enabled')
