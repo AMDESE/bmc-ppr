@@ -118,8 +118,8 @@ void ReadHostQueue2()
 #else
     if (btPpr == NULL)
     {
-        btPpr = new BootTimePprData();
         sd_journal_print(LOG_INFO, " ReadHostQueue2: start BT Poll \n");
+        btPpr = new BootTimePprData();
     }
 #endif
 }

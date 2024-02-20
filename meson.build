@@ -23,6 +23,10 @@ configure_file(output: 'config.h',
   configuration: conf_data
 )
 
+if (get_option('bmc_dev_irq').enabled())
+  add_project_arguments('-DBMC_DEV_IRQ', language:'cpp')
+endif
+
 # (Meson requires an absolute path for find_library().)
 libdir = meson.current_source_dir() + './lib/'
 

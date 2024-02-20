@@ -133,8 +133,8 @@ class BootTimePprData
 
     BootTimePprData()
     {
-        sd_journal_print(LOG_ERR, "BootTimePprData: start Shared Mem Pool \n");
-        poolSharedMem();
+        sd_journal_print(LOG_ERR, "BootTimePprData: start Shared Mem Poll \n");
+        pollSharedMem();
     }
 
     ~BootTimePprData()
@@ -148,7 +148,7 @@ class BootTimePprData
     UINT8 BiosOutCnt;
     bool SystemStateOn;
 
-    void poolSharedMem();
+    void pollSharedMem();
     void ReadBootTimePprData(UINT8 entryCount);
     bool getBiosInData();
     UINT8 setBiosOutData();

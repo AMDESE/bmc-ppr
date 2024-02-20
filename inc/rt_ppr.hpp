@@ -74,6 +74,7 @@ const int PAYLOAD_6 = 6;
 const int MAX_REPAIR_SLOTS = 64;
 const int MAX_CURRENT_Runtime_PPR = 8;
 const int MAX_DIMM_SLOT = 24;
+const int MAX_DIMM_SLOT_PER_SOC = 12;
 const int DIMM_SOCKET_PL_NUM = 3;
 const int DIMM_SOCKET_MASK = 0xE000;
 const int DIMM_SOCKET_SHIFT = 13;
@@ -85,6 +86,12 @@ const int DIMM_CHIP_PL_NUM = 0;
 const int DIMM_CHIP_MASK = 0x6000;
 const int DIMM_CHIP_SHIFT = 13;
 const int DIMM_CHIP_2DPC = 2;
+const int DIMM_SN_LSB_MASK = 0x0000FFFF;
+const int DIMM_SN_MSB_MASK = 0xFFFF0000;
+const int DIMM_SN_MSB_SHIFT = 16;
+const int DIMM_SN_CH_MASK = 0x0F;
+const int DIMM_SN_MODE_1 = 0x80;
+const int DIMM_SN_2DPC = 0x10;
 
 // PPR Service
 const static constexpr char* pprDataInPath =
