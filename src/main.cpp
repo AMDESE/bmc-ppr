@@ -7,6 +7,27 @@ static boost::asio::io_service io;
 std::shared_ptr<sdbusplus::asio::connection> conn;
 void* base_addr;
 
+void CreateConfigFile()
+{
+
+    struct stat buffer;
+
+    // Create PPR Config file
+    if (stat(config_file, &buffer) != 0)
+    {
+        sd_journal_print(LOG_INFO, "New PPR Config file created\n");
+        nlohmann::json jsonConfig = {
+            {"oobPprEnable", false},
+            {"RtToBt", true},
+            {"BtSetToHard", false},
+        };
+
+        std::ofstream jsonWrite(config_file);
+        jsonWrite << jsonConfig;
+        jsonWrite.close();
+    }
+}
+
 void CreatePprDir()
 {
     int dir;
@@ -22,9 +43,30 @@ void CreatePprDir()
         }
         else
         {
-            sd_journal_print(LOG_ERR, "New PPR directory was created\n");
+            sd_journal_print(LOG_INFO, "New PPR directory created\n");
         }
     }
+}
+
+void SetPprDbusParam(const char* propertyName, bool status)
+{
+
+    boost::system::error_code ec;
+    boost::asio::io_context io;
+    auto conn = std::make_shared<sdbusplus::asio::connection>(io);
+
+    conn->async_method_call(
+        [](boost::system::error_code ec) {
+            if (ec)
+            {
+                sd_journal_print(LOG_ERR, "Failed to Set PPR DBus\n");
+            }
+        },
+        "xyz.openbmc_project.PostPackageRepair",
+        "/xyz/openbmc_project/PostPackageRepair",
+        "org.freedesktop.DBus.Properties", "Set",
+        "xyz.openbmc_project.PostPackageRepair.PprData", propertyName,
+        std::variant<bool>{status});
 }
 
 // Initialize Shared Memory device
@@ -136,6 +178,7 @@ int main()
     sd_event* event = nullptr;
 
     CreatePprDir();
+    CreateConfigFile();
 
     InitHostSharedMem();
 

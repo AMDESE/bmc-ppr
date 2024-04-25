@@ -49,8 +49,9 @@ bool BootTimePprData::getBiosInData()
 
                 if (Command == BT_PPR_CMD_BIOS_CNT)
                 {
-                    // TBD Enable PPR OOB
+                    // Enable OOB PPR
                     sd_journal_print(LOG_INFO, "getBiosInData BIOS Signature");
+                    globalBT->updateConfigFile(PPR_ENABLE, true);
                     if (BiosInCnt > MAX_REPAIR_SLOTS)
                     {
                         sd_journal_print(LOG_INFO,
@@ -70,9 +71,10 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {
-                    // TBD disable PPR OOB
+                    // Disable OOB PPR
                     sd_journal_print(LOG_DEBUG,
                                      "getBiosInData Disable PPR OOB");
+                    globalBT->updateConfigFile(PPR_ENABLE, false);
                     return true;
                 }
             }

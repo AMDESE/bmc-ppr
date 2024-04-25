@@ -76,6 +76,13 @@ void childPprData::SetBTfromRT(int index)
     sd_journal_print(LOG_INFO, "setBTfromRT: DIMM = %d (%d , %d, %d)  \n", dimm,
                      Socket, Ch, Chip);
 
+    if (globalBT->getBtSetToHard())
+    {
+        sd_journal_print(LOG_INFO,
+                         "setBTfromRT: DIMM = Set BT to Hard Repair  \n");
+        m_pprRuntimeData[index].payload[PAYLOAD_4] =
+            (m_pprRuntimeData[index].payload[PAYLOAD_4] | BT_SET_TO_HARD_MASK);
+    }
     // Copy the 1st 6 Payloads
     for (int i = 0; i < PAYLOAD_6; i++)
         payload.push_back(m_pprRuntimeData[index].payload[i]);
@@ -264,6 +271,43 @@ std::vector<
     return Finalvec;
 }
 
+std::vector<uint16_t> childPprData::getPostPackageRepairConfig()
+{
+    std::vector<uint16_t> FinalData = {0, 0, 0};
+    sd_journal_print(LOG_INFO,
+                     "childPprData::getPostPackageRepairConfig() - Begin \n");
+    if (globalBT->getPprEnableStatus())
+        FinalData[0] = 1;
+    if (globalBT->getRtToBt())
+        FinalData[1] = 1;
+    if (globalBT->getBtSetToHard())
+        FinalData[2] = 1;
+    return FinalData;
+}
+
+bool childPprData::setPostPackageRepairConfig(uint16_t flag, bool data)
+{
+    bool ret = true;
+
+    sd_journal_print(LOG_INFO,
+                     "setPostPackageRepairConfig() - flag 0x%x data 0x%x \n",
+                     flag, data);
+    if (flag & RT_TO_BT_MASK)
+    {
+        globalBT->updateConfigFile(RT_TO_BT, data);
+    }
+    else if (flag & BT_SET_TO_HARD_MASK)
+    {
+        globalBT->updateConfigFile(BT_SET_TO_HARD, data);
+    }
+    else
+    {
+        ret = false;
+    }
+
+    return ret;
+}
+
 uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
 {
     uint8_t offset = 0;
@@ -375,7 +419,10 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
 
         if (m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_PASS)
         {
-            SetBTfromRT((int)index);
+            if (globalBT->getRtToBt())
+            { // Set BT from RT is enabled
+                SetBTfromRT((int)index);
+            }
         }
 
         sd_journal_print(LOG_INFO,
