@@ -56,9 +56,13 @@ extern "C" {
 #define BTJsonFilePath "/var/lib/amd-ppr/BtPPRData.json"
 #define RTJSON_FILE "RtPPRData.json"
 #define RTJsonFilePath "/var/lib/amd-ppr/RtPPRData.json"
+#define config_file "/var/lib/amd-ppr/config.json"
 #define PPR_NODE "PprData"
 #define RUNTIME "RunTime"
 #define BOOTTIME "BootTime"
+#define PPR_ENABLE (1)
+#define RT_TO_BT (2)
+#define BT_SET_TO_HARD (3)
 
 extern void* base_addr;
 
@@ -70,6 +74,7 @@ const int JSON_SLEEP_TIME = 1;
 const int MAX_RETRIES = 10;
 const int RAS_ACTION_ID_RUNTIME_PPR = 0;
 const int PAYLOAD_SIZE = 10;
+const int PAYLOAD_4 = 4;
 const int PAYLOAD_6 = 6;
 const int MAX_REPAIR_SLOTS = 64;
 const int MAX_CURRENT_Runtime_PPR = 8;
@@ -92,6 +97,13 @@ const int DIMM_SN_MSB_SHIFT = 16;
 const int DIMM_SN_CH_MASK = 0x0F;
 const int DIMM_SN_MODE_1 = 0x80;
 const int DIMM_SN_2DPC = 0x10;
+const int BT_SET_TO_HARD_MASK = 0x0001;
+const int RT_TO_BT_MASK = 0x0002;
+const int MAX_PPR_CONFIG_INDEX = 3;
+const int OOB_PPR_ENABLE_INDEX = 0;
+const int RT_TO_BT_INDEX = 1;
+const int BT_SET_TO_HARD_INDEX = 2;
+const int PPR_CONFIG_TRUE = 1;
 
 // PPR Service
 const static constexpr char* pprDataInPath =
@@ -380,8 +392,116 @@ class commonPPR
         }
     }
 
+    bool getPprEnableStatus()
+    {
+        return m_oobPprEnable;
+    }
+
+    void setPprEnableStatus(bool status)
+    {
+        sd_journal_print(LOG_INFO, "Set oobPprEnable:  %s \n",
+                         status ? "true" : "false");
+        m_oobPprEnable = status;
+    }
+
+    bool getRtToBt()
+    {
+        return m_RtToBt;
+    }
+
+    void setRtToBt(bool status)
+    {
+        sd_journal_print(LOG_INFO, "Set RtToBt:  %s \n",
+                         status ? "true" : "false");
+        m_RtToBt = status;
+    }
+
+    bool getBtSetToHard()
+    {
+        return m_BtSetToHard;
+    }
+
+    void setBtSetToHard(bool status)
+    {
+        sd_journal_print(LOG_INFO, "Set BtSetToHard:  %s \n",
+                         status ? "true" : "false");
+        m_BtSetToHard = status;
+    }
+
+    void readConfigFile()
+    {
+        bool tmp;
+
+        std::ifstream jsonRead(config_file);
+        nlohmann::json data = nlohmann::json::parse(jsonRead);
+
+        tmp = false;
+        tmp = data["oobPprEnable"];
+        setPprEnableStatus(tmp);
+
+        tmp = true;
+        tmp = data["RtToBt"];
+        setRtToBt(tmp);
+
+        tmp = false;
+        tmp = data["BtSetToHard"];
+        setBtSetToHard(tmp);
+
+        jsonRead.close();
+    }
+
+    void updateConfigFile(int param, bool status)
+    {
+        bool tmp;
+
+        std::ifstream jsonRead(config_file);
+        nlohmann::json data = nlohmann::json::parse(jsonRead);
+
+        switch (param)
+        {
+            case PPR_ENABLE:
+                tmp = data["oobPprEnable"];
+                if (tmp != status)
+                {
+                    setPprEnableStatus(status);
+                    data["oobPprEnable"] = status;
+                }
+                break;
+
+            case RT_TO_BT:
+                tmp = data["RtToBt"];
+                if (tmp != status)
+                {
+                    setRtToBt(status);
+                    data["RtToBt"] = status;
+                }
+                break;
+
+            case BT_SET_TO_HARD:
+                tmp = data["BtSetToHard"];
+                if (tmp != status)
+                {
+                    setBtSetToHard(status);
+                    data["BtSetToHard"] = status;
+                }
+                break;
+
+            default:
+                break;
+        }
+
+        std::ofstream jsonWrite(config_file);
+        jsonWrite << data;
+
+        jsonRead.close();
+        jsonWrite.close();
+    }
+
   private:
     uint16_t m_pprBoottimeIndex;
+    bool m_oobPprEnable;
+    bool m_RtToBt;
+    bool m_BtSetToHard;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprBoottimeData;
     vector<PprJsonData> BtPprJsonData;
 };
@@ -401,6 +521,10 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
         globalBT->setBTindex(0);
+        globalBT->readConfigFile();
+        getConfigParam(OOB_PPR_ENABLE_INDEX);
+        getConfigParam(RT_TO_BT_INDEX);
+        getConfigParam(BT_SET_TO_HARD_INDEX);
         globalBT->BtJsonRead();
         globalBT->updateBTfromCache();
         sd_journal_print(LOG_INFO, "PPR Data Constructor - Done \n");
@@ -423,6 +547,11 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
                            std::vector<uint16_t>>>
         getPostPackageRepairStatus() override;
+
+    // get PPR Config
+    bool getConfigParam(uint16_t index);
+    std::vector<uint16_t> getPostPackageRepairConfig() override;
+    bool setPostPackageRepairConfig(uint16_t flag, bool data) override;
 
     // Set value of RecordAd
     virtual bool recordAdd(bool value) override;
