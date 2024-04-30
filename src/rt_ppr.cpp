@@ -76,6 +76,13 @@ void childPprData::SetBTfromRT(int index)
     sd_journal_print(LOG_INFO, "setBTfromRT: DIMM = %d (%d , %d, %d)  \n", dimm,
                      Socket, Ch, Chip);
 
+    if (globalBT->getBtSetToHard())
+    {
+        sd_journal_print(LOG_INFO,
+                         "setBTfromRT: DIMM = Set BT to Hard Repair  \n");
+        m_pprRuntimeData[index].payload[PAYLOAD_4] =
+            (m_pprRuntimeData[index].payload[PAYLOAD_4] | BT_SET_TO_HARD_MASK);
+    }
     // Copy the 1st 6 Payloads
     for (int i = 0; i < PAYLOAD_6; i++)
         payload.push_back(m_pprRuntimeData[index].payload[i]);
@@ -264,6 +271,72 @@ std::vector<
     return Finalvec;
 }
 
+bool childPprData::getConfigParam(uint16_t index)
+{
+    bool data = false;
+    switch (index)
+    {
+        case OOB_PPR_ENABLE_INDEX:
+            data = globalBT->getPprEnableStatus();
+            PprData::oobPprEnable(data, false);
+            break;
+        case RT_TO_BT_INDEX:
+            data = globalBT->getRtToBt();
+            PprData::rtToBt(data, false);
+            break;
+        case BT_SET_TO_HARD_INDEX:
+            data = globalBT->getBtSetToHard();
+            PprData::btSetToHard(data, false);
+            break;
+        default:
+            break;
+    }
+    return data;
+}
+std::vector<uint16_t> childPprData::getPostPackageRepairConfig()
+{
+    std::vector<uint16_t> FinalData = {0, 0, 0};
+    bool data;
+    uint16_t i;
+
+    sd_journal_print(LOG_INFO,
+                     "childPprData::getPostPackageRepairConfig() - Begin \n");
+
+    for (i = 0; i < MAX_PPR_CONFIG_INDEX; i++)
+    {
+        data = getConfigParam(i);
+        if (data)
+            FinalData[i] = PPR_CONFIG_TRUE;
+    }
+
+    return FinalData;
+}
+
+bool childPprData::setPostPackageRepairConfig(uint16_t flag, bool data)
+{
+    bool ret = true;
+
+    sd_journal_print(LOG_INFO,
+                     "setPostPackageRepairConfig() - flag 0x%x data 0x%x \n",
+                     flag, data);
+    if (flag & RT_TO_BT_MASK)
+    {
+        globalBT->updateConfigFile(RT_TO_BT, data);
+        PprData::rtToBt(data, false);
+    }
+    else if (flag & BT_SET_TO_HARD_MASK)
+    {
+        globalBT->updateConfigFile(BT_SET_TO_HARD, data);
+        PprData::btSetToHard(data, false);
+    }
+    else
+    {
+        ret = false;
+    }
+
+    return ret;
+}
+
 uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
 {
     uint8_t offset = 0;
@@ -375,7 +448,10 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
 
         if (m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_PASS)
         {
-            SetBTfromRT((int)index);
+            if (globalBT->getRtToBt())
+            { // Set BT from RT is enabled
+                SetBTfromRT((int)index);
+            }
         }
 
         sd_journal_print(LOG_INFO,
