@@ -70,6 +70,9 @@ const int BT_PPR_CMD_BMC_CNT = 0x0082;
 const int Q2_BIOS_SIG = 0x81;
 const int Q2_READ_CNT = 4;
 
+const UINT8 BT_MATCH = 0xFF;
+const UINT8 BT_NOT_MATCH = 0x00;
+
 struct BiosPprHeader
 {
     UINT32 Signature : 24;
@@ -146,6 +149,7 @@ class BootTimePprData
     std::array<PPR_Data, MAX_REPAIR_SLOTS> pprBoottimeDataOut;
     UINT8 BiosInCnt;
     UINT8 BiosOutCnt;
+    UINT8 MatchIndex[MAX_REPAIR_SLOTS];
     bool SystemStateOn;
 
     void pollSharedMem();
@@ -153,5 +157,5 @@ class BootTimePprData
     bool getBiosInData();
     UINT8 setBiosOutData();
     void WriteHostSharedMem();
-    void compareBiosData();
+    UINT8 compareBiosData();
 };
