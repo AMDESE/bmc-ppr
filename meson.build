@@ -30,8 +30,6 @@ endif
 # (Meson requires an absolute path for find_library().)
 libdir = meson.current_source_dir() + './lib/'
 
-apml_dep = cpp.find_library('apml64', dirs : libdir) # ./lib/libapml64.lib
-
 deps = [
   dependency('libgpiodcxx', default_options: ['bindings=cxx']),
   dependency('systemd'),
@@ -40,7 +38,7 @@ deps = [
   dependency('phosphor-logging'),
   dependency('nlohmann_json'),
   dependency('threads'),
-  apml_dep,
+  cpp.find_library('apml64'),
 ]
 
 executable(

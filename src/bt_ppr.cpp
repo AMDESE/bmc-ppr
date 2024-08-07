@@ -190,16 +190,18 @@ UINT8 BootTimePprData::setBiosOutData()
     return ret;
 }
 
-void BootTimePprData::compareBiosData()
+UINT8 BootTimePprData::compareBiosData()
 {
     int i, j, k;
     bool match;
     UINT8 matchCnt = 0;
+    UINT8 ret = 0;
     UINT16 payloadMask[PAYLOAD_SIZE] = {0xFFFF, 0xFFFF, 0xFFFF, 0xE3FF, 0x0007,
                                         0x0000, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
 
     for (i = 0; i < BiosOutCnt; i++)
     {
+        MatchIndex[i] = BT_NOT_MATCH;
         for (j = 0; j < BiosInCnt; j++)
         {
             match = true;
@@ -223,21 +225,23 @@ void BootTimePprData::compareBiosData()
                     pprBoottimeDataIn[j].repairResult;
                 globalBT->UpdateBtResult(i, pprBoottimeDataIn[j].repairResult);
                 matchCnt++;
+                MatchIndex[i] = BT_MATCH;
+                break;
             }
         } // end of for j
     }     // end of for i
     if (BiosOutCnt >= matchCnt)
-        BiosOutCnt = BiosOutCnt - matchCnt;
-    else
-        BiosOutCnt = 0;
+        ret = BiosOutCnt - matchCnt;
     sd_journal_print(LOG_INFO,
-                     "compareBiosData BiosOutCnt = %d , match Cnt = %d\n",
-                     BiosOutCnt, matchCnt);
+                     "compareBiosData ret(Out Cnt) = %d , match Cnt = %d\n",
+                     ret, matchCnt);
+    return ret;
 }
 
 void BootTimePprData::WriteHostSharedMem()
 {
     UINT8 index = PPR_BT_HEADER_SIZE;
+    UINT8 outCnt = 0;
     BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
     BiosPprData* BiosPprData_ptr = new BiosPprData();
 
@@ -247,41 +251,54 @@ void BootTimePprData::WriteHostSharedMem()
                      "WriteHostSharedMem start , BT count Out = %d , In = %d ",
                      BiosOutCnt, BiosInCnt);
     if (BiosInCnt > 0)
-        compareBiosData();
+        outCnt = compareBiosData();
+    else
+        outCnt = BiosOutCnt;
+    sd_journal_print(
+        LOG_INFO,
+        "WriteHostSharedMem start , BT count Out = %d (%d) , In = %d ", outCnt,
+        BiosOutCnt, BiosInCnt);
 
     // Header
     BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
 
     BiosPprHeader_ptr->Signature = BOOTTIME_PPR_SIGNATURE;
     BiosPprHeader_ptr->Version = BOOTTIME_PPR_VERSION;
-    BiosPprHeader_ptr->EntryCount = BiosOutCnt;
+    BiosPprHeader_ptr->EntryCount = outCnt;
     BiosPprHeader_ptr->ReportSize =
-        PPR_BT_HEADER_SIZE + (PPR_BT_DATA_SIZE * BiosOutCnt);
+        PPR_BT_HEADER_SIZE + (PPR_BT_DATA_SIZE * outCnt);
     BiosPprHeader_ptr->Command = BT_PPR_CMD_BMC_CNT;
 
     // PPR Entry
-    if (BiosOutCnt > 0)
+    if (outCnt > 0)
     {
         for (int i = 0; i < (int)BiosOutCnt; i++)
         {
-            BiosPprData_ptr = (struct BiosPprData*)((UINT8*)base_addr + index);
-            BiosPprData_ptr->Type = BOOTTIME_PPR_TYPE;
-            BiosPprData_ptr->Version = BOOTTIME_PPR_VERSION;
-            BiosPprData_ptr->Length = PPR_BT_DATA_SIZE;
-            BiosPprData_ptr->RepairEntryNumber =
-                pprBoottimeDataOut[i].repairEntryNum;
-            BiosPprData_ptr->RepairType = pprBoottimeDataOut[i].repairType;
-            BiosPprData_ptr->SocNum = pprBoottimeDataOut[i].socNum;
-            for (int j = 0; j < PAYLOAD_SIZE; j++)
+            if (MatchIndex[i] == BT_NOT_MATCH)
             {
-                BiosPprData_ptr->Payload[j] = pprBoottimeDataOut[i].payload[j];
-            }
+                BiosPprData_ptr =
+                    (struct BiosPprData*)((UINT8*)base_addr + index);
+                BiosPprData_ptr->Type = BOOTTIME_PPR_TYPE;
+                BiosPprData_ptr->Version = BOOTTIME_PPR_VERSION;
+                BiosPprData_ptr->Length = PPR_BT_DATA_SIZE;
+                BiosPprData_ptr->RepairEntryNumber =
+                    pprBoottimeDataOut[i].repairEntryNum;
+                BiosPprData_ptr->RepairType = pprBoottimeDataOut[i].repairType;
+                BiosPprData_ptr->SocNum = pprBoottimeDataOut[i].socNum;
+                for (int j = 0; j < PAYLOAD_SIZE; j++)
+                {
+                    BiosPprData_ptr->Payload[j] =
+                        pprBoottimeDataOut[i].payload[j];
+                }
 
-            sd_journal_print(
-                LOG_INFO, "BIOS Out Data Entry Num %d Type %d SOC %d \n",
-                BiosPprData_ptr->RepairEntryNumber, BiosPprData_ptr->RepairType,
-                BiosPprData_ptr->SocNum);
-            index = index + PPR_BT_DATA_SIZE;
+                sd_journal_print(
+                    LOG_INFO,
+                    "BIOS Out Data Entry Num %d Type %d SOC %d PL0 %d\n",
+                    BiosPprData_ptr->RepairEntryNumber,
+                    BiosPprData_ptr->RepairType, BiosPprData_ptr->SocNum,
+                    BiosPprData_ptr->Payload[0]);
+                index = index + PPR_BT_DATA_SIZE;
+            }
         } // end of for i
     }     // end of if BiosOutCnt
 }
