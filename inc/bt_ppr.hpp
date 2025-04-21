@@ -40,9 +40,15 @@
 #include <xyz/openbmc_project/Common/error.hpp>
 #include <xyz/openbmc_project/State/Host/server.hpp>
 
+#ifdef SP7_PPR
+#define index_file                                                             \
+    ("/sys/devices/platform/soc@10000000/12110000.bmc-dev/bmc-dev-queue2")
+#define BMC_DEV ("/dev/bmc-device0")
+#else   // SP5 system
 #define index_file                                                             \
     ("/sys/devices/platform/ahb/ahb:apb/1e7e0000.bmc_dev/bmc-dev-queue2")
 #define BMC_DEV ("/dev/bmc-device")
+#endif
 
 #define UINT8 uint8_t
 #define UINT16 uint16_t

@@ -5,3 +5,4 @@ option(
 )
 
 option('bmc_dev_irq', type : 'feature', value : 'enabled')
+option('sp7_family', type : 'feature', value : 'disabled')
