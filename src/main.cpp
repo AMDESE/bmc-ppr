@@ -117,12 +117,12 @@ void ReadHostQueue2()
         if (ret < 0)
         {
             sd_journal_print(
-                LOG_ERR, " ReadHostQueue2: Read Failed with return %d\n", ret);
+                LOG_ERR, " ReadHostQueue2: Read Failed with return %ld\n", ret);
         }
         else
         {
             sd_journal_print(LOG_INFO,
-                             " ReadHostQueue2:Read return (%d) Data 0x%x "
+                             " ReadHostQueue2:Read return (%ld) Data 0x%x "
                              "0x%x 0x%x 0x%x \n",
                              ret, buff[0], buff[1], buff[2], buff[3]);
             if ((buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
