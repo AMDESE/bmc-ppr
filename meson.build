@@ -4,7 +4,7 @@ project(
   default_options: [
     'warning_level=3',
     'werror=true',
-    'cpp_std=c++23'
+    'cpp_std=c++17'
   ],
   license: 'Apache-2.0',
   version: '1.0',
@@ -25,10 +25,6 @@ configure_file(output: 'config.h',
 
 if (get_option('bmc_dev_irq').enabled())
   add_project_arguments('-DBMC_DEV_IRQ', language:'cpp')
-endif
-
-if (get_option('sp7_family').enabled())
-  add_project_arguments('-DSP7_PPR', language:'cpp')
 endif
 
 # (Meson requires an absolute path for find_library().)
