@@ -1,11 +1,62 @@
 #include "bt_ppr.hpp"
 #include "rt_ppr.hpp"
 
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <thread>
+
+// Optional custom configuration file
+const std::string configFilePath = "/usr/share/amd-ppr/ppr-config.json";
+
+// default values for PPR Config (SP5)
+std::string bmcDev = "/dev/bmc-device";
+std::string indexFile =
+    "/sys/devices/platform/ahb/ahb:apb/1e7e0000.bmc_dev/bmc-dev-queue2";
 
 static boost::asio::io_service io;
 std::shared_ptr<sdbusplus::asio::connection> conn;
 void* base_addr;
+
+int loadConfigData()
+{
+
+    std::ifstream configFile(configFilePath.c_str());
+    if (!configFile.is_open())
+    {
+        // Use default Configuration
+        sd_journal_print(LOG_INFO, "PPR loadConfigData: Config file not "
+                                   "present, use default config \n");
+        return 0;
+    }
+
+    try
+    {
+        sd_journal_print(LOG_INFO, "PPR Config Data file: %s \n",
+                         configFilePath.c_str());
+        auto jsonData = nlohmann::json::parse(configFile, nullptr, true, true);
+        if (jsonData.is_discarded())
+        {
+            sd_journal_print(LOG_ERR, "PPR Config Data Json parser failure \n");
+            return -1;
+        }
+
+        auto pprConfig = jsonData["ppr_configs"];
+
+        // Update PPR Config data
+        bmcDev = pprConfig["bmcDev"];
+        sd_journal_print(LOG_INFO, "PPR: bmcDev= %s \n", bmcDev.c_str());
+        indexFile = pprConfig["indexFile"];
+    }
+    catch (const std::exception& e)
+    {
+        sd_journal_print(LOG_ERR,
+                         "PPR Config Data(%s) Json parser failure: %s \n",
+                         configFilePath.c_str(), e.what());
+        return -1;
+    }
+
+    return 0;
+}
 
 void CreateConfigFile()
 {
@@ -59,9 +110,9 @@ void InitHostSharedMem()
 
     try
     {
-        if (stat(BMC_DEV, &sb) == 0)
+        if (stat(bmcDev.c_str(), &sb) == 0)
         {
-            mfd = open(BMC_DEV, O_RDWR | O_SYNC);
+            mfd = open(bmcDev.c_str(), O_RDWR | O_SYNC);
             base_addr =
                 mmap(0, sdev, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
             if (base_addr == MAP_FAILED)
@@ -89,7 +140,7 @@ void InitHostSharedMem()
             e.what());
     }
 
-    sd_journal_print(LOG_DEBUG, "InitHostSharedMem End with Base Addr = %p \n",
+    sd_journal_print(LOG_INFO, "InitHostSharedMem End with Base Addr = %p \n",
                      base_addr);
     return;
 }
@@ -105,7 +156,8 @@ void ReadHostQueue2()
     while (1)
     {
         sd_journal_print(LOG_INFO, " ReadHostQueue2: Start \n");
-        fd = open(index_file, O_RDWR, 0);
+
+        fd = open(indexFile.c_str(), O_RDWR, 0);
         if (fd < 0)
         {
             sd_journal_print(LOG_ERR,
@@ -113,18 +165,19 @@ void ReadHostQueue2()
             close(fd);
             exit(-1);
         }
+
         ret = read(fd, buff, Q2_READ_CNT);
         if (ret < 0)
         {
             sd_journal_print(
-                LOG_ERR, " ReadHostQueue2: Read Failed with return %ld\n", ret);
+                LOG_ERR, " ReadHostQueue2: Read Failed with return %d \n", (int)ret);
         }
         else
         {
             sd_journal_print(LOG_INFO,
-                             " ReadHostQueue2:Read return (%ld) Data 0x%x "
+                             " ReadHostQueue2:Read return Data 0x%x "
                              "0x%x 0x%x 0x%x \n",
-                             ret, buff[0], buff[1], buff[2], buff[3]);
+                             buff[0], buff[1], buff[2], buff[3]);
             if ((buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
                 (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG))
             {
@@ -147,6 +200,14 @@ void ReadHostQueue2()
 
 int main()
 {
+    // read PPR configuration JSON file
+    if (loadConfigData() < 0)
+    {
+        sd_journal_print(LOG_ERR, "Can't open json config file %s !\n",
+                         configFilePath.c_str());
+        return 0;
+    }
+
     // connect to dbus
     conn = std::make_shared<sdbusplus::asio::connection>(io);
 

@@ -27,9 +27,9 @@ using namespace std;
 bool BootTimePprData::getBiosInData()
 {
     UINT32 Signature;
-    UINT16 Command;
+    UINT8 Command;
 
-    sd_journal_print(LOG_DEBUG, "getBiosInData Start");
+    sd_journal_print(LOG_INFO, "getBiosInData Start 0x%p", base_addr);
     BiosInCnt = 0;
     if (base_addr != NULL)
     {
@@ -44,7 +44,7 @@ bool BootTimePprData::getBiosInData()
             if (Signature == BOOTTIME_PPR_SIGNATURE)
             {
                 sd_journal_print(
-                    LOG_DEBUG, "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
+                    LOG_INFO, "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
                     Signature, BiosInCnt, Command);
 
                 if (Command == BT_PPR_CMD_BIOS_CNT)
@@ -67,12 +67,12 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_BMC_CNT)
                 {
-                    sd_journal_print(LOG_DEBUG, "getBiosInData BMC Signature");
+                    sd_journal_print(LOG_INFO, "getBiosInData BMC Signature");
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {
                     // Disable OOB PPR
-                    sd_journal_print(LOG_DEBUG,
+                    sd_journal_print(LOG_INFO,
                                      "getBiosInData Disable PPR OOB");
                     globalBT->updateConfigFile(PPR_ENABLE, false);
                     return true;
@@ -108,7 +108,7 @@ void BootTimePprData::pollSharedMem()
 #endif
     else
         sd_journal_print(LOG_ERR, "BMC_DEV Shared Membar is not available \n");
-    sd_journal_print(LOG_DEBUG, "pollSharedMem End \n");
+    sd_journal_print(LOG_INFO, "pollSharedMem End \n");
 }
 
 void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
@@ -276,6 +276,7 @@ void BootTimePprData::WriteHostSharedMem()
         {
             if (MatchIndex[i] == BT_NOT_MATCH)
             {
+                sd_journal_print(LOG_INFO, "WriteHostSharedMem write Payload i=%d ", i);
                 BiosPprData_ptr =
                     (struct BiosPprData*)((UINT8*)base_addr + index);
                 BiosPprData_ptr->Type = BOOTTIME_PPR_TYPE;
