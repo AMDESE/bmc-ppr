@@ -57,7 +57,7 @@ const int MEMBAR_BUFFER_LENGTH = 1000;
 const int BMC_BUFFER_LENGTH = 1024;
 const int CMD_BUFF_LEN = 10;
 const int BOOTTIME_PPR_SIGNATURE = 0x525050; // PPR
-const int BOOTTIME_PPR_VERSION = 0x01;
+const int BOOTTIME_PPR_VERSION = 0x02;
 const int BOOTTIME_PPR_TYPE = 0x03;
 
 const int BT_PPR_CMD_DISABLE_OOB = 0x0080;
@@ -88,8 +88,9 @@ struct BiosPprData
     UINT8 RepairType;
     UINT8 SocNum;
     UINT8 RepairResult;
+    UINT8 Reserved1;
     UINT16 Payload[10];
-    UINT8 Reserved[5];
+    UINT8 Reserved2[4];
 };
 
 class BootTimePprDataHolder
