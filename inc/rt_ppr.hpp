@@ -25,6 +25,10 @@
 #include <systemd/sd-journal.h>
 #include <unistd.h>
 
+#include <sdbusplus/bus.hpp>
+#include <sdbusplus/exception.hpp>
+#include <variant>
+
 #include <cereal/archives/json.hpp>
 #include <cereal/types/memory.hpp>
 #include <cereal/types/vector.hpp>
@@ -497,11 +501,54 @@ class commonPPR
         jsonWrite.close();
     }
 
+    bool getMultiHostState()
+    {
+        return m_multiHostState;
+    }
+
+    void setMultiHostState()
+    {
+        m_multiHostState = false;
+
+        try
+        {
+            sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
+            auto method = bus.new_method_call("xyz.openbmc_project.Settings",
+                                              "/xyz/openbmc_project/control/HostMode",
+                                              "org.freedesktop.DBus.Properties",
+                                              "Get");
+            method.append("xyz.openbmc_project.Control.HostMode", "Mode");
+
+            auto reply = bus.call(method);
+
+            std::variant<uint16_t> valueVariant;
+            reply.read(valueVariant);
+
+            uint16_t value = std::get<uint16_t>(valueVariant);
+            if (value != 0)
+            {
+                sd_journal_print(LOG_INFO, "PPR: Set Multi Host State to True\n");
+                m_multiHostState = true;
+            }
+            else
+            {
+                sd_journal_print(LOG_INFO, "PPR: Set Multi Host State to False\n");
+            }
+        }
+        catch (const sdbusplus::exception::SdBusError& e)
+        {
+            sd_journal_print(LOG_ERR,
+                             "setMultiHostState: Failed to get System Mode: %s\n",
+                             e.what());
+        }
+    }
+
   private:
     uint16_t m_pprBoottimeIndex;
     bool m_oobPprEnable;
     bool m_RtToBt;
     bool m_BtSetToHard;
+    bool m_multiHostState;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprBoottimeData;
     vector<PprJsonData> BtPprJsonData;
 };
@@ -520,6 +567,7 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_pprRuntimeIndex = 0;
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
+        globalBT->setMultiHostState();
         globalBT->setBTindex(0);
         globalBT->readConfigFile();
         getConfigParam(OOB_PPR_ENABLE_INDEX);
