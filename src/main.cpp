@@ -4,6 +4,12 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <thread>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 
 // Optional custom configuration file
 const std::string configFilePath = "/usr/share/amd-ppr/ppr-config.json";
@@ -13,7 +19,7 @@ std::string bmcDev = "/dev/bmc-device";
 std::string indexFile =
     "/sys/devices/platform/ahb/ahb:apb/1e7e0000.bmc_dev/bmc-dev-queue2";
 
-static boost::asio::io_service io;
+static boost::asio::io_context io;
 std::shared_ptr<sdbusplus::asio::connection> conn;
 void* base_addr;
 
