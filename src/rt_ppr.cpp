@@ -345,6 +345,7 @@ uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
     uint16_t retryCount = MAX_RETRIES;
     uint32_t status;
     uint16_t slot;
+    uint16_t soc;
 
     sd_journal_print(LOG_INFO,
                      "startRuntimeRepair: Slot = %d Runtime Curr Cnt = %d\n",
@@ -357,6 +358,10 @@ uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
             "startRuntimeRepair: Begin Runtime Repair for Slot = %d\n", slot);
         for (offset = 0; offset < PAYLOAD_SIZE; offset++)
         {
+            if (globalBT->getMultiHostState())
+                soc = m_pprRuntimeData[slot].socNum;
+            else
+                soc = 0;
             Data.payload.repair_entry_num = repairSlot;
             Data.payload.offset = offset * 2;
             Data.payload.pay_load = m_pprRuntimeData[slot].payload[offset];
@@ -371,7 +376,7 @@ uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
             while (retryCount > 0)
             {
                 ret_oob = set_bmc_ras_action_status(
-                    m_pprRuntimeData[slot].socNum, Data, &status);
+                    soc, Data, &status);
 
                 if (ret_oob == OOB_SUCCESS)
                 {
@@ -406,6 +411,7 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
     struct get_ras_action_data_in Data;
     struct ras_action_status status;
     uint16_t retryCount = MAX_RETRIES;
+    uint16_t soc;
     oob_status_t ret_oob;
 
     sd_journal_print(
@@ -421,9 +427,13 @@ uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
         Data.ras_action_id = RAS_ACTION_ID_RUNTIME_PPR;
 
         ret_oob = OOB_MAILBOX_ERR_END;
+        if (globalBT->getMultiHostState())
+            soc = m_pprRuntimeData[index].socNum;
+        else
+            soc = 0;
         while (retryCount > 0)
         {
-            ret_oob = get_bmc_ras_action_status(m_pprRuntimeData[index].socNum,
+            ret_oob = get_bmc_ras_action_status(soc,
                                                 Data, &status);
 
             if (ret_oob == OOB_SUCCESS)
