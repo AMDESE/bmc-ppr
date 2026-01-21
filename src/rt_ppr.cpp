@@ -1,6 +1,7 @@
 #include "rt_ppr.hpp"
 
 commonPPR* commonPPR::instance = 0;
+uint8_t DIMM_ADDR[MAX_DIMM_SLOT_PER_SOC]={7,3,5,1,6,2,4,0,15,11,13,9,14,10,12,8};
 
 int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 {
@@ -14,7 +15,7 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     {
         return MAX_DIMM_SLOT;
     }
-    dimmAddr = (uint8_t)(dimm + DIMM_SN_MODE_1);
+    dimmAddr = (uint8_t)(DIMM_ADDR[dimm] + DIMM_SN_MODE_1);
 
     if (Socket == DIMM_SOCKET_0)
     { // Socket 0
