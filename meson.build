@@ -17,7 +17,7 @@ if (get_option('bmc_dev_irq').enabled())
   add_project_arguments('-DBMC_DEV_IRQ', language:'cpp')
 endif
 
-# RT PPR file-watcher paths — passed as compile-time macros
+# RT PPR file-watcher paths
 rt_ppr_watch_dir  = get_option('ras_watch_dir')
 rt_ppr_src_config = get_option('rt_ppr_src_config_file')
 rt_ppr_config     = get_option('rt_ppr_config_file')

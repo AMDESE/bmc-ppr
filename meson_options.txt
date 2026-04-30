@@ -6,7 +6,7 @@ option(
 
 option('bmc_dev_irq', type : 'feature', value : 'enabled')
 
-# ─── RT PPR file-watcher paths ──────────────────────────────────────────────────
+# RT PPR watcher paths
 option(
     'ras_watch_dir',
     type: 'string',
