@@ -7,7 +7,7 @@
 
 int main()
 {
-    // Ensure /var/lib/amd-ppr/ exists before the inotify watcher starts
+    // Ensure /var/lib/amd-ppr/ exists
     struct stat sb{};
     if (stat(kPprDir.data(), &sb) != 0)
     {
@@ -18,12 +18,11 @@ int main()
         }
     }
 
-    // Runtime Soft PPR — inotify-based file watcher.  Blocks until a fatal
-    // error occurs (e.g. inotify_init failure), then returns non-zero.
+    // Runtime Soft PPR — inotify-based file watcher.
     try
     {
         RtPprManager rtPpr{RAS_WATCH_DIR, RT_PPR_CONFIG_FILE};
-        rtPpr.run(); // does not return under normal operation
+        rtPpr.run();
     }
     catch (const std::exception& e)
     {

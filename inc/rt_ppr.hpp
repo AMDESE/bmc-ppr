@@ -36,26 +36,26 @@ extern "C" {
 
 namespace fs = std::filesystem;
 
-// ─── Directory created on first boot ─────────────────────────────────────────
+// Directory created on first boot
 
 constexpr std::string_view kPprDir = "/var/lib/amd-ppr/";
 
-// ─── PPR mailbox constants ────────────────────────────────────────────────────
+// PPR mailbox constants
 
 constexpr int MAX_RETRIES              = 10;
 constexpr int RAS_ACTION_ID_RUNTIME_PPR = 0;
 constexpr int PAYLOAD_SIZE             = 10;
 
-// ─── PPR repair status ────────────────────────────────────────────────────────
+// PPR repair status
 
 enum PPR_STATUS
 {
     PPR_STATUS_REPAIR_FAIL          = 0x00,
     PPR_STATUS_REPAIR_PASS          = 0x01,
-    PPR_STATUS_REPAIR_NOT_PROCESSED = 256,   // sentinel: wider than uint8_t
+    PPR_STATUS_REPAIR_NOT_PROCESSED = 256,
 };
 
-// ─── RT PPR entry (one row in *_rtppr.json pprDataIn array) ──────────────────
+// RT PPR entry
 
 struct RtPprEntry
 {
@@ -64,24 +64,12 @@ struct RtPprEntry
     uint32_t socNum{0};
     uint16_t payload[PAYLOAD_SIZE]{};
 
-    // Filled in after polling get_bmc_ras_action_status
     uint16_t repairResult{static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED)};
 };
 
-// ─── RT PPR Manager ───────────────────────────────────────────────────────────
-
 /**
  * RtPprManager
- *
  * Watches RAS_WATCH_DIR for *_rtppr.json files written by amd-bmc-ras.
- * For each file:
- *   1. Parse "pprDataIn" entries.
- *   2. Send repair data via set_bmc_ras_action_status (APML mailbox).
- *   3. Poll get_bmc_ras_action_status until result or timeout.
- *   4. Write *_rtppr_status.json alongside the trigger file.
- *
- * On startup, any *_rtppr.json with no matching *_rtppr_status.json is
- * processed first (handles files written during a prior boot).
  */
 class RtPprManager
 {
@@ -89,7 +77,6 @@ class RtPprManager
     explicit RtPprManager(const std::string& watchDir,
                           const std::string& configFile);
 
-    /** Enter the inotify watch loop. Does not return under normal operation. */
     void run();
 
   private:
