@@ -19,13 +19,11 @@ endif
 
 # RT PPR file-watcher paths
 rt_ppr_watch_dir  = get_option('ras_watch_dir')
-rt_ppr_src_config = get_option('rt_ppr_src_config_file')
 rt_ppr_config     = get_option('rt_ppr_config_file')
 
 cpp_args = [
   '-DRAS_WATCH_DIR="'      + rt_ppr_watch_dir  + '"',
   '-DCONFIG_FILE="'        + rt_ppr_config     + '"',
-  '-DSRC_CONFIG_FILE="'    + rt_ppr_src_config + '"',
   '-DRT_PPR_CONFIG_FILE="' + rt_ppr_config     + '"',
 ]
 

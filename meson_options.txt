@@ -15,13 +15,6 @@ option(
 )
 
 option(
-    'rt_ppr_src_config_file',
-    type: 'string',
-    value: '/usr/share/amd-bmc-ppr/ppr_rt_config.json',
-    description: 'Installed (read-only) default RT PPR config file'
-)
-
-option(
     'rt_ppr_config_file',
     type: 'string',
     value: '/var/lib/amd-ppr/ppr_rt_config.json',
