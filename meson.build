@@ -28,10 +28,7 @@ cpp_args = [
 ]
 
 deps = [
-  dependency('libgpiodcxx', default_options: ['bindings=cxx']),
   dependency('systemd'),
-  dependency('sdbusplus'),
-  dependency('sdeventplus'),
   dependency('phosphor-logging'),
   dependency('nlohmann_json'),
   dependency('threads'),
