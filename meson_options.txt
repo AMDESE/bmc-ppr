@@ -5,3 +5,18 @@ option(
 )
 
 option('bmc_dev_irq', type : 'feature', value : 'enabled')
+
+# RT PPR watcher paths
+option(
+    'ras_watch_dir',
+    type: 'string',
+    value: '/var/lib/amd-bmc-ras/',
+    description: 'Directory written by amd-bmc-ras — watched for *_rtppr.json trigger files'
+)
+
+option(
+    'rt_ppr_config_file',
+    type: 'string',
+    value: '/var/lib/amd-ppr/ppr_rt_config.json',
+    description: 'Runtime RT PPR config file — copied from rt_ppr_src_config_file on first boot'
+)

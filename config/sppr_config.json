@@ -1,0 +1,5 @@
+{
+    "MaxRetries": 10,
+    "RetryDelayUs": 200000,
+    "StatusPollTimeoutMs": 5000
+}

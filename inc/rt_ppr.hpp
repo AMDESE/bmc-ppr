@@ -1,4 +1,4 @@
-/*
+﻿/*
  // Copyright (c) 2023 AMD Inc.
  //
  // Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,616 +14,84 @@
  // limitations under the License.
  */
 #pragma once
-#include <config.h>
 
-#include <iostream>
-#include <tuple> // for tuple
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <string_view>
 #include <vector>
 
-// Library effective with Linux
-#include <ctype.h>
+#include <sys/inotify.h>
 #include <systemd/sd-journal.h>
 #include <unistd.h>
 
-#include <sdbusplus/bus.hpp>
-#include <sdbusplus/exception.hpp>
-#include <variant>
-
-#include <cereal/archives/json.hpp>
-#include <cereal/types/memory.hpp>
-#include <cereal/types/vector.hpp>
-#include <experimental/filesystem>
-#include <filesystem>
-#include <fstream>
 #include <nlohmann/json.hpp>
-#include <regex>
-#include <string_view>
-#include <utility>
-#include <xyz/openbmc_project/Collection/DeleteAll/server.hpp>
-#include <xyz/openbmc_project/Common/error.hpp>
-#include <xyz/openbmc_project/PostPackageRepair/PprData/server.hpp>
+#include <phosphor-logging/lg2.hpp>
 
 extern "C" {
 #include <sys/stat.h>
-
-#include "apml.h"
-#include "esmi_cpuid_msr.h"
 #include "esmi_mailbox.h"
-#include "esmi_mailbox_nda.h"
-#include "esmi_rmi.h"
-#include "i2c/smbus.h"
-#include "linux/i2c-dev.h"
 }
 
-#define PPR_DIR "/var/lib/amd-ppr/"
-#define BTJSON_FILE "BtPPRData.json"
-#define BTJsonFilePath "/var/lib/amd-ppr/BtPPRData.json"
-#define RTJSON_FILE "RtPPRData.json"
-#define RTJsonFilePath "/var/lib/amd-ppr/RtPPRData.json"
-#define config_file "/var/lib/amd-ppr/config.json"
-#define PPR_NODE "PprData"
-#define RUNTIME "RunTime"
-#define BOOTTIME "BootTime"
-#define PPR_ENABLE (1)
-#define RT_TO_BT (2)
-#define BT_SET_TO_HARD (3)
-
-extern void* base_addr;
-
-using namespace std;
 namespace fs = std::filesystem;
+
+// Directory created on first boot
+
 constexpr std::string_view kPprDir = "/var/lib/amd-ppr/";
 
-const int JSON_SLEEP_TIME = 1;
-const int MAX_RETRIES = 10;
-const int RAS_ACTION_ID_RUNTIME_PPR = 0;
-const int PAYLOAD_SIZE = 10;
-const int PAYLOAD_4 = 4;
-const int PAYLOAD_6 = 6;
-const int MAX_REPAIR_SLOTS = 64;
-const int MAX_CURRENT_Runtime_PPR = 8;
-const int MAX_DIMM_SLOT = 32;
-const int MAX_DIMM_SLOT_PER_SOC = 16;
-const int DIMM_SOCKET_PL_NUM = 3;
-const int DIMM_SOCKET_MASK = 0xE000;
-const int DIMM_SOCKET_SHIFT = 13;
-const int DIMM_SOCKET_0 = 0;
-const int DIMM_CH_PL_NUM = 3;
-const int DIMM_CH_MASK = 0x01E0;
-const int DIMM_CH_SHIFT = 5;
-const int DIMM_CHIP_PL_NUM = 0;
-const int DIMM_CHIP_MASK = 0x6000;
-const int DIMM_CHIP_SHIFT = 13;
-const int DIMM_CHIP_2DPC = 2;
-const int DIMM_SN_LSB_MASK = 0x0000FFFF;
-const int DIMM_SN_MSB_MASK = 0xFFFF0000;
-const int DIMM_SN_MSB_SHIFT = 16;
-const int DIMM_SN_CH_MASK = 0x0F;
-const int DIMM_SN_MODE_1 = 0x80;
-const int DIMM_SN_2DPC = 0x10;
-const int BT_SET_TO_HARD_MASK = 0x0001;
-const int RT_TO_BT_MASK = 0x0002;
-const int MAX_PPR_CONFIG_INDEX = 3;
-const int OOB_PPR_ENABLE_INDEX = 0;
-const int RT_TO_BT_INDEX = 1;
-const int BT_SET_TO_HARD_INDEX = 2;
-const int PPR_CONFIG_TRUE = 1;
+// PPR mailbox constants
 
-// PPR Service
-const static constexpr char* pprDataInPath =
-    "/xyz/openbmc_project/PostPackageRepair/PprData";
-const static constexpr char* PropertiesIntf = "org.freedesktop.DBus.Properties";
+constexpr int MAX_RETRIES              = 10;
+constexpr int RAS_ACTION_ID_RUNTIME_PPR = 0;
+constexpr int PAYLOAD_SIZE             = 10;
 
-const int PPR_TYPE_RUNTIME_MASK = 0x00;
-const int PPR_TYPE_BOOTTIME_MASK = 0x8000;
-const int PPR_TYPE_SOFT_MASK = 0x00;
-const int PPR_TYPE_HARD_MASK = 0x01;
-const int PPR_TYPE_MBIST_MASK = 0x03;
+// PPR repair status
 
-enum REPAIRTYPE
-{
-    PPR_TYPE_RUNTIME_SOFT = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_SOFT_MASK),
-    PPR_TYPE_RUNTIME_HARD = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_HARD_MASK),
-    PPR_TYPE_RUNTIME_MBIST = (PPR_TYPE_RUNTIME_MASK | PPR_TYPE_MBIST_MASK),
-    PPR_TYPE_BOOTTIME_SOFT = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_SOFT_MASK),
-    PPR_TYPE_BOOTTIME_HARD = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_HARD_MASK),
-    PPR_TYPE_BOOTTIME_MBIST = (PPR_TYPE_BOOTTIME_MASK | PPR_TYPE_MBIST_MASK),
-};
-
-// cmd 0x67 Get PPR RAS Action Status
-// Repair Status
 enum PPR_STATUS
 {
-    PPR_STATUS_REPAIR_FAIL = 0x0,
-    PPR_STATUS_REPAIR_PASS = 0x1,
-    PPR_STATUS_REPAIR_RANK_MISS_MATCH_ERROR = 0x2,
-    PPR_STATUS_REPAIR_RANK_INVALID_ERROR = 0x4,
-    PPR_STATUS_REPAIR_BANK_INVALID_ERROR = 0x08,
-    PPR_STATUS_REPAIR_SOCKET_INVALID_ERROR = 0x10,
-    PPR_STATUS_REPAIR_CHANNEL_INVALID_ERROR = 0x20,
-    PPR_STATUS_REPAIR_DEVICE_INVALID_ERROR = 0x40,
-    PPR_STATUS_REPAIR_DEVICE_MISMATCH_ERROR = 0x80,
+    PPR_STATUS_REPAIR_FAIL          = 0x00,
+    PPR_STATUS_REPAIR_PASS          = 0x01,
     PPR_STATUS_REPAIR_NOT_PROCESSED = 256,
 };
 
-struct PPR_Data
+// RT PPR entry
+
+struct RtPprEntry
 {
-    uint16_t repairEntryNum;
-    uint16_t repairType;
-    uint16_t socNum;
-    uint16_t repairResult;
-    uint16_t payload[PAYLOAD_SIZE];
+    uint32_t repairEntryNum{0};
+    uint32_t repairType{0};
+    uint32_t socNum{0};
+    uint16_t payload[PAYLOAD_SIZE]{};
+
+    uint16_t repairResult{static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED)};
 };
 
-struct PprJsonData
+/**
+ * RtPprManager
+ * Watches RAS_WATCH_DIR for *_rtppr.json files written by amd-bmc-ras.
+ */
+class RtPprManager
 {
-    int index;
-    std::string pprType;
-    uint16_t repairEntryNum;
-    uint16_t repairType;
-    uint16_t socNum;
-    uint16_t repairResult;
-    std::vector<uint16_t> payload;
-};
-
-template <typename Archive>
-void serialize(Archive& archive, PprJsonData& jsonData)
-{
-    archive(cereal::make_nvp("index", jsonData.index),
-            cereal::make_nvp("pprType", jsonData.pprType),
-            cereal::make_nvp("repairEntryNum", jsonData.repairEntryNum),
-            cereal::make_nvp("repairType", jsonData.repairType),
-            cereal::make_nvp("socNum", jsonData.socNum),
-            cereal::make_nvp("repairResult", jsonData.repairResult),
-            cereal::make_nvp("payload", jsonData.payload));
-}
-
-struct EventDeleter
-{
-    void operator()(sd_event* event) const
-    {
-        event = sd_event_unref(event);
-    }
-};
-
-using EventPtr = std::unique_ptr<sd_event, EventDeleter>;
-
-using ppr_data =
-    sdbusplus::xyz::openbmc_project::PostPackageRepair::server::PprData;
-using delete_all =
-    sdbusplus::xyz::openbmc_project::Collection::server::DeleteAll;
-
-class commonPPR
-{
-    static commonPPR* instance;
-    commonPPR()
-    {
-    }
-
   public:
-    static commonPPR* getInstance()
-    {
-        if (!instance)
-            instance = new commonPPR;
-        return instance;
-    }
+    explicit RtPprManager(const std::string& watchDir,
+                          const std::string& configFile);
 
-    uint16_t getBTindex()
-    {
-        return m_pprBoottimeIndex;
-    }
-
-    void setBTindex(uint16_t index)
-    {
-        m_pprBoottimeIndex = index;
-    }
-
-    std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
-        getBTdata(uint16_t index)
-    {
-        std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
-                   std::vector<uint16_t>>
-            tup;
-
-        if (index < MAX_REPAIR_SLOTS)
-        {
-            std::vector<uint16_t> vec;
-            for (int i = 0; i < PAYLOAD_SIZE; i++)
-                vec.push_back(m_pprBoottimeData[index].payload[i]);
-            tup = std::make_tuple(m_pprBoottimeData[index].repairEntryNum,
-                                  m_pprBoottimeData[index].repairType,
-                                  m_pprBoottimeData[index].socNum,
-                                  m_pprBoottimeData[index].repairResult, vec);
-        }
-        return tup;
-    }
-
-    void BtJsonRead()
-    {
-        char filepath[] = BTJsonFilePath;
-        if (fs::exists(filepath))
-        {
-            try
-            {
-                std::ifstream input(PPR_DIR BTJSON_FILE);
-                cereal::JSONInputArchive archive(input);
-                archive(BtPprJsonData);
-            }
-            catch (cereal::Exception& e)
-            {
-                sd_journal_print(
-                    LOG_INFO,
-                    "BtJsonRead: Error reading BT PPR json file %s \n",
-                    e.what());
-            }
-        }
-    }
-
-    void updateBTfromCache()
-    {
-        uint16_t result, repairEntryNum, repairType, socNum;
-        std::vector<uint16_t> payload;
-
-        if (BtPprJsonData.size() > 0)
-        {
-            // check if index exist
-            for (int vecIndex = 0; vecIndex < (int)BtPprJsonData.size();
-                 vecIndex++)
-            {
-                repairType = BtPprJsonData.at(vecIndex).repairType;
-                if ((repairType & PPR_TYPE_BOOTTIME_MASK) != 0)
-                {
-                    repairEntryNum = BtPprJsonData.at(vecIndex).repairEntryNum;
-                    repairType = BtPprJsonData.at(vecIndex).repairType;
-                    socNum = BtPprJsonData.at(vecIndex).socNum;
-                    payload = BtPprJsonData.at(vecIndex).payload;
-                    result = BtPprJsonData.at(vecIndex).repairResult;
-
-                    setBTdata(false, BOOTTIME, repairEntryNum, repairType,
-                              socNum, result, payload);
-                }
-            }
-        }
-        sd_journal_print(LOG_INFO, "update PPR BT: Index = %d ", getBTindex());
-    }
-
-    void setBTdata(bool writeJson, std::string pprType, uint16_t repairEntryNum,
-                   uint16_t repairType, uint16_t socNum, uint16_t result,
-                   std::vector<uint16_t> payload)
-    {
-        m_pprBoottimeData[m_pprBoottimeIndex].repairEntryNum = repairEntryNum;
-        m_pprBoottimeData[m_pprBoottimeIndex].repairType = repairType;
-        m_pprBoottimeData[m_pprBoottimeIndex].socNum = socNum;
-        m_pprBoottimeData[m_pprBoottimeIndex].repairResult = result;
-        for (int j = 0; j < PAYLOAD_SIZE; j++)
-            m_pprBoottimeData[m_pprBoottimeIndex].payload[j] = payload[j];
-
-        if (writeJson)
-        {
-            try
-            {
-                if (BtPprJsonData.size() > 0)
-                {
-                    // check if index exist
-                    for (int vecIndex = 0; vecIndex < (int)BtPprJsonData.size();
-                         vecIndex++)
-                    {
-                        if (BtPprJsonData.at(vecIndex).index ==
-                            m_pprBoottimeIndex)
-                        {
-                            sd_journal_print(
-                                LOG_INFO,
-                                "setBTdata: PPR Data already exist \n");
-                            return;
-                        }
-                    }
-                }
-
-                PprJsonData pprObj;
-                pprObj.index = m_pprBoottimeIndex;
-                pprObj.pprType = pprType;
-                pprObj.repairEntryNum = repairEntryNum;
-                pprObj.repairType = repairType;
-                pprObj.socNum = socNum;
-                pprObj.repairResult = result;
-                pprObj.payload = payload;
-                // add ppr data in vector
-                BtPprJsonData.push_back(pprObj);
-                // create json file
-                char filepath[] = BTJsonFilePath;
-                if (fs::exists(filepath))
-                {
-                    std::remove(filepath);
-                    sleep(JSON_SLEEP_TIME);
-                }
-                std::ofstream output(PPR_DIR BTJSON_FILE);
-                cereal::JSONOutputArchive oarchive(output);
-                oarchive(cereal::make_nvp(PPR_NODE, BtPprJsonData));
-            }
-            catch (cereal::Exception& e)
-            {
-                sd_journal_print(LOG_INFO,
-                                 "setBTdata: Failed to write json file  %s \n",
-                                 e.what());
-            }
-        }
-
-        m_pprBoottimeIndex++;
-    }
-
-    void UpdateBtResult(uint16_t index, uint16_t result)
-    {
-        bool update = false;
-        try
-        {
-            m_pprBoottimeData[index].repairResult = result;
-            if (BtPprJsonData.size() > 0)
-            {
-                // check if index exist
-                for (int vecIndex = 0; vecIndex < (int)BtPprJsonData.size();
-                     vecIndex++)
-                {
-                    if (BtPprJsonData.at(vecIndex).index == index)
-                    {
-                        if (BtPprJsonData.at(vecIndex).repairResult != result)
-                        {
-                            BtPprJsonData.at(vecIndex).repairResult = result;
-                            update = true;
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (update)
-            { // create json file
-                char filepath[] = BTJsonFilePath;
-                if (fs::exists(filepath))
-                {
-                    std::remove(filepath);
-                    sleep(JSON_SLEEP_TIME);
-                }
-                std::ofstream output(PPR_DIR BTJSON_FILE);
-                cereal::JSONOutputArchive oarchive(output);
-                oarchive(cereal::make_nvp(PPR_NODE, BtPprJsonData));
-            }
-        }
-        catch (cereal::Exception& e)
-        {
-            sd_journal_print(LOG_ERR,
-                             "UpdateBtResult: Failed to write json file  %s \n",
-                             e.what());
-        }
-    }
-
-    bool getPprEnableStatus()
-    {
-        return m_oobPprEnable;
-    }
-
-    void setPprEnableStatus(bool status)
-    {
-        sd_journal_print(LOG_INFO, "Set oobPprEnable:  %s \n",
-                         status ? "true" : "false");
-        m_oobPprEnable = status;
-    }
-
-    bool getRtToBt()
-    {
-        return m_RtToBt;
-    }
-
-    void setRtToBt(bool status)
-    {
-        sd_journal_print(LOG_INFO, "Set RtToBt:  %s \n",
-                         status ? "true" : "false");
-        m_RtToBt = status;
-    }
-
-    bool getBtSetToHard()
-    {
-        return m_BtSetToHard;
-    }
-
-    void setBtSetToHard(bool status)
-    {
-        sd_journal_print(LOG_INFO, "Set BtSetToHard:  %s \n",
-                         status ? "true" : "false");
-        m_BtSetToHard = status;
-    }
-
-    void readConfigFile()
-    {
-        bool tmp;
-
-        std::ifstream jsonRead(config_file);
-        nlohmann::json data = nlohmann::json::parse(jsonRead);
-
-        tmp = false;
-        tmp = data["oobPprEnable"];
-        setPprEnableStatus(tmp);
-
-        tmp = true;
-        tmp = data["RtToBt"];
-        setRtToBt(tmp);
-
-        tmp = false;
-        tmp = data["BtSetToHard"];
-        setBtSetToHard(tmp);
-
-        jsonRead.close();
-    }
-
-    void updateConfigFile(int param, bool status)
-    {
-        bool tmp;
-
-        std::ifstream jsonRead(config_file);
-        nlohmann::json data = nlohmann::json::parse(jsonRead);
-
-        switch (param)
-        {
-            case PPR_ENABLE:
-                tmp = data["oobPprEnable"];
-                if (tmp != status)
-                {
-                    setPprEnableStatus(status);
-                    data["oobPprEnable"] = status;
-                }
-                break;
-
-            case RT_TO_BT:
-                tmp = data["RtToBt"];
-                if (tmp != status)
-                {
-                    setRtToBt(status);
-                    data["RtToBt"] = status;
-                }
-                break;
-
-            case BT_SET_TO_HARD:
-                tmp = data["BtSetToHard"];
-                if (tmp != status)
-                {
-                    setBtSetToHard(status);
-                    data["BtSetToHard"] = status;
-                }
-                break;
-
-            default:
-                break;
-        }
-
-        std::ofstream jsonWrite(config_file);
-        jsonWrite << data;
-
-        jsonRead.close();
-        jsonWrite.close();
-    }
-
-    bool getMultiHostState()
-    {
-        return m_multiHostState;
-    }
-
-    void setMultiHostState()
-    {
-        m_multiHostState = false;
-
-        try
-        {
-            sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
-            auto method = bus.new_method_call("xyz.openbmc_project.Settings",
-                                              "/xyz/openbmc_project/control/HostMode",
-                                              "org.freedesktop.DBus.Properties",
-                                              "Get");
-            method.append("xyz.openbmc_project.Control.HostMode", "Mode");
-
-            auto reply = bus.call(method);
-
-            std::variant<uint16_t> valueVariant;
-            reply.read(valueVariant);
-
-            uint16_t value = std::get<uint16_t>(valueVariant);
-            if (value != 0)
-            {
-                sd_journal_print(LOG_INFO, "PPR: Set Multi Host State to True\n");
-                m_multiHostState = true;
-            }
-            else
-            {
-                sd_journal_print(LOG_INFO, "PPR: Set Multi Host State to False\n");
-            }
-        }
-        catch (const sdbusplus::exception::SdBusError& e)
-        {
-            sd_journal_print(LOG_ERR,
-                             "setMultiHostState: Failed to get System Mode: %s\n",
-                             e.what());
-        }
-    }
+    void run();
 
   private:
-    uint16_t m_pprBoottimeIndex;
-    bool m_oobPprEnable;
-    bool m_RtToBt;
-    bool m_BtSetToHard;
-    bool m_multiHostState;
-    std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprBoottimeData;
-    vector<PprJsonData> BtPprJsonData;
-};
+    std::string m_watchDir;
+    int         m_maxRetries{MAX_RETRIES};
+    int         m_retryDelayUs{200000};        // 200 ms
+    int         m_statusPollTimeoutMs{5000};
 
-// PPR Class
-struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
-{
-
-    commonPPR* globalBT = globalBT->getInstance();
-
-    childPprData(sdbusplus::bus::bus& bus, const char* path, EventPtr& event) :
-        sdbusplus::server::object_t<ppr_data, delete_all>(bus, path), bus(bus),
-        event(event)
-    {
-
-        m_pprRuntimeIndex = 0;
-        m_currentRuntimeIndex = 0;
-        m_currentRuntimeCnt = 0;
-        globalBT->setMultiHostState();
-        globalBT->setBTindex(0);
-        globalBT->readConfigFile();
-        getConfigParam(OOB_PPR_ENABLE_INDEX);
-        getConfigParam(RT_TO_BT_INDEX);
-        getConfigParam(BT_SET_TO_HARD_INDEX);
-        globalBT->BtJsonRead();
-        globalBT->updateBTfromCache();
-        sd_journal_print(LOG_INFO, "PPR Data Constructor - Done \n");
-    }
-
-    ~childPprData()
-    {
-    }
-
-    void deleteAll() override;
-    // Set values of repair data
-    bool setPostPackageRepairData(uint16_t repairEntryNum, uint16_t repairType,
-                                  uint16_t socNum,
-                                  std::vector<uint16_t> payload) override;
-
-    // Start run time post package repair
-    uint32_t startRuntimeRepair(uint16_t repairSlot) override;
-
-    // Get status of repair
-    std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
-                           std::vector<uint16_t>>>
-        getPostPackageRepairStatus() override;
-
-    // get PPR Config
-    bool getConfigParam(uint16_t index);
-    std::vector<uint16_t> getPostPackageRepairConfig() override;
-    bool setPostPackageRepairConfig(uint16_t flag, bool data) override;
-
-    // Set value of RecordAd
-    virtual bool recordAdd(bool value) override;
-    void UpdatePprResult(int index, uint16_t repairResult, uint16_t repairType);
-    void WriteBtPprFile(std::string type, int index, uint16_t repairEntryNum,
-                        uint16_t repairType, uint16_t socNum,
-                        uint16_t repairResult, std::vector<uint16_t> payload);
-    uint16_t GetRuntimeIndex(void);
-    std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
-        getRuntimeData(uint16_t index, uint16_t slot);
-    std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
-        getBoottimeData(uint16_t index);
-
-  private:
-    sdbusplus::bus::bus& bus;
-    EventPtr& event;
-
-    std::array<PPR_Data, MAX_REPAIR_SLOTS> m_pprRuntimeData;
-    uint32_t updateRuntimeRepairStatus(uint16_t index, uint16_t slot);
-    uint16_t m_pprRuntimeIndex;
-    uint16_t m_currentRuntimeIndex;
-    uint16_t m_currentRuntimeCnt;
-    void SetBTfromRT(int index);
-    int GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip);
-    uint16_t DimmSN0[MAX_DIMM_SLOT];
-    uint16_t DimmSN1[MAX_DIMM_SLOT];
+    bool loadConfig(const std::string& configFile);
+    void scanExistingFiles();
+    void processFile(const fs::path& rtpprPath);
+    bool parseRtPprJson(const fs::path& path,
+                        std::vector<RtPprEntry>& entries);
+    bool sendRepairData(std::vector<RtPprEntry>& entries);
+    bool pollRepairStatus(std::vector<RtPprEntry>& entries);
+    void writeStatusFile(const fs::path& rtpprPath,
+                         const std::vector<RtPprEntry>& entries);
 };

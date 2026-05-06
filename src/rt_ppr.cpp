@@ -1,476 +1,401 @@
+﻿// Copyright (c) 2023 AMD Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// RtPprManager â€” Runtime Soft PPR for bmc-ppr
+//
+// Watches RAS_WATCH_DIR for *_rtppr.json files written by amd-bmc-ras,
+// sends repair data to the CPU via APML mailbox, polls for the result,
+// writes *_rtppr_status.json, and emits a Redfish EventLog entry.
+
 #include "rt_ppr.hpp"
 
-commonPPR* commonPPR::instance = 0;
-uint8_t DIMM_ADDR[MAX_DIMM_SLOT_PER_SOC]={7,3,5,1,6,2,4,0,15,11,13,9,14,10,12,8};
+using json = nlohmann::json;
 
-int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
+RtPprManager::RtPprManager(const std::string& watchDir,
+                            const std::string& configFile) :
+    m_watchDir(watchDir)
 {
-    int dimm;
-    uint8_t dimmAddr;
-    uint32_t dimmData;
-    oob_status_t ret_oob;
-
-    dimm = (Ch & DIMM_SN_CH_MASK);
-    if (dimm >= MAX_DIMM_SLOT_PER_SOC)
-    {
-        return MAX_DIMM_SLOT;
-    }
-    dimmAddr = (uint8_t)(DIMM_ADDR[dimm] + DIMM_SN_MODE_1);
-
-    if (Socket == DIMM_SOCKET_0)
-    { // Socket 0
-        if (Chip >= DIMM_CHIP_2DPC)
-        { // 2 DPC
-            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-            dimmAddr = dimmAddr + DIMM_SN_2DPC;
-        }
-    }
-    else
-    { // socket 1
-        dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-    }
-
-    // Call APML to get the DIMM SN
-    sd_journal_print(LOG_INFO, "GetDimmSerialNum: DIMM = %d Addr = 0x%x \n",
-                     dimm, dimmAddr);
-
-    ret_oob = get_dimm_serial_num((uint8_t)Socket, dimmAddr, &dimmData);
-    if (ret_oob == OOB_SUCCESS)
-    {
-        DimmSN0[dimm] = (uint16_t)(dimmData & DIMM_SN_LSB_MASK);
-        DimmSN1[dimm] =
-            (uint16_t)((dimmData & DIMM_SN_MSB_MASK) >> DIMM_SN_MSB_SHIFT);
-        sd_journal_print(LOG_INFO,
-                         "GetDimmSerialNum: DIMM SN = 0x%x , %d, %d   \n",
-                         dimmData, DimmSN0[dimm], DimmSN1[dimm]);
-    }
-    else
-    {
-        sd_journal_print(
-            LOG_INFO, "GetDimmSerialNum: Error getting DIMM SN for %d %d  \n",
-            dimm, dimmAddr);
-        DimmSN0[dimm] = 0;
-        DimmSN1[dimm] = 0;
-    }
-
-    return dimm;
+    // Normalise: strip trailing slash
+    while (m_watchDir.size() > 1 && m_watchDir.back() == '/')
+        m_watchDir.pop_back();
+    loadConfig(configFile);
 }
 
-void childPprData::SetBTfromRT(int index)
+bool RtPprManager::loadConfig(const std::string& configFile)
 {
-    uint16_t Socket;
-    uint16_t Ch;
-    uint16_t Chip;
-    int dimm;
-    int btIndex;
-    std::vector<uint16_t> payload;
-
-    Socket = ((m_pprRuntimeData[index].payload[DIMM_SOCKET_PL_NUM] &
-               DIMM_SOCKET_MASK) >>
-              DIMM_SOCKET_SHIFT);
-    Ch = ((m_pprRuntimeData[index].payload[DIMM_CH_PL_NUM] & DIMM_CH_MASK) >>
-          DIMM_CH_SHIFT);
-    Chip =
-        ((m_pprRuntimeData[index].payload[DIMM_CHIP_PL_NUM] & DIMM_CHIP_MASK) >>
-         DIMM_CHIP_SHIFT);
-    dimm = GetDimmSerialNum(Socket, Ch, Chip);
-    sd_journal_print(LOG_INFO, "setBTfromRT: DIMM = %d (%d , %d, %d)  \n", dimm,
-                     Socket, Ch, Chip);
-
-    if (globalBT->getBtSetToHard())
+    std::ifstream f(configFile);
+    if (!f.is_open())
     {
-        sd_journal_print(LOG_INFO,
-                         "setBTfromRT: DIMM = Set BT to Hard Repair  \n");
-        m_pprRuntimeData[index].payload[PAYLOAD_4] =
-            (m_pprRuntimeData[index].payload[PAYLOAD_4] | BT_SET_TO_HARD_MASK);
+        lg2::warning("RtPprManager: cannot open config {FILE}, using defaults",
+                     "FILE", configFile);
+        return false;
     }
-    // Copy the 1st 6 Payloads
-    for (int i = 0; i < PAYLOAD_6; i++)
-        payload.push_back(m_pprRuntimeData[index].payload[i]);
-
-    // Payload 7 and 8 are DIMM SN
-    if (dimm >= MAX_DIMM_SLOT)
+    try
     {
-        sd_journal_print(
-            LOG_ERR, "setBTfromRT: Bad DIMM # (%d : %d %d %d) in PPR file  \n",
-            dimm, Socket, Ch, Chip);
-        payload.push_back((uint16_t)0);
-        payload.push_back((uint16_t)0);
+        json cfg                  = json::parse(f);
+        m_maxRetries              = cfg.value("MaxRetries",          m_maxRetries);
+        m_retryDelayUs            = cfg.value("RetryDelayUs",        m_retryDelayUs);
+        m_statusPollTimeoutMs     = cfg.value("StatusPollTimeoutMs", m_statusPollTimeoutMs);
     }
-    else
+    catch (const json::exception& e)
     {
-        payload.push_back(DimmSN0[dimm]);
-        payload.push_back(DimmSN1[dimm]);
-        sd_journal_print(LOG_INFO, "setBTfromRT: DIMM %d SN = 0x%x 0x%x\n",
-                         dimm, DimmSN0[dimm], DimmSN1[dimm]);
+        lg2::warning("RtPprManager: failed to parse config {FILE}: {MSG}",
+                     "FILE", configFile, "MSG", e.what());
+        return false;
     }
-    // Payload 9 and 10 are 0 (Currently DIMM SN is only 4 bytes)
-    payload.push_back((uint16_t)0);
-    payload.push_back((uint16_t)0);
-
-    btIndex = globalBT->getBTindex();
-    sd_journal_print(LOG_INFO, "setBTfromRT: Add Boottime Entry Index = %d \n",
-                     btIndex);
-    globalBT->setBTdata(
-        true, RUNTIME, m_pprRuntimeData[index].repairEntryNum,
-        (m_pprRuntimeData[index].repairType | PPR_TYPE_BOOTTIME_MASK),
-        m_pprRuntimeData[index].socNum, PPR_STATUS_REPAIR_NOT_PROCESSED,
-        payload);
-}
-void childPprData::deleteAll()
-{
-    sd_journal_print(
-        LOG_ERR,
-        "Delete Action not permitted for Post Package Repair Entries \n");
+    lg2::info("RtPprManager: config loaded MaxRetries={R} RetryDelayUs={D} "
+              "StatusPollTimeoutMs={T}",
+              "R", m_maxRetries, "D", m_retryDelayUs, "T",
+              m_statusPollTimeoutMs);
+    return true;
 }
 
-bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
-                                            uint16_t repairType,
-                                            uint16_t socNum,
-                                            std::vector<uint16_t> payload)
+void RtPprManager::run()
 {
-    std::vector<uint16_t>::iterator it;
-    int i = 0;
-    uint16_t index;
+    scanExistingFiles();
 
-    if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
+    int inotifyFd = inotify_init1(IN_CLOEXEC);
+    if (inotifyFd < 0)
     {
-        if (m_currentRuntimeCnt == 0)
+        throw std::runtime_error(
+            std::string("RtPprManager: inotify_init1 failed: ") + strerror(errno));
+    }
+
+    std::error_code ec;
+    fs::create_directories(m_watchDir, ec);
+
+    int wd = inotify_add_watch(inotifyFd, m_watchDir.c_str(), IN_CLOSE_WRITE);
+    if (wd < 0)
+    {
+        close(inotifyFd);
+        throw std::runtime_error(
+            std::string("RtPprManager: inotify_add_watch failed on ") +
+            m_watchDir + ": " + strerror(errno));
+    }
+
+    lg2::info("RtPprManager: watching {DIR} for *_rtppr.json files",
+              "DIR", m_watchDir);
+
+    constexpr size_t BUF_SIZE = 4096;
+    char buf[BUF_SIZE]
+        __attribute__((aligned(__alignof__(struct inotify_event))));
+
+    while (true)
+    {
+        ssize_t len = read(inotifyFd, buf, BUF_SIZE);
+        if (len < 0)
         {
-            m_currentRuntimeIndex = m_pprRuntimeIndex;
+            if (errno == EINTR)
+                continue;
+            throw std::runtime_error(
+                std::string("RtPprManager: inotify read failed: ") + strerror(errno));
         }
-        m_currentRuntimeCnt++;
-        if (m_currentRuntimeCnt > MAX_CURRENT_Runtime_PPR)
+
+        for (char* p = buf; p < buf + len;)
         {
-            sd_journal_print(
-                LOG_INFO,
-                "setPPRData: Reach Max Runtime Curr Cnt = %d , Curr Index = %d",
-                m_currentRuntimeCnt, m_currentRuntimeIndex);
-            return false;
-        }
-        sd_journal_print(LOG_INFO,
-                         "setPPRData: Runtime Curr Cnt = %d , Curr Index = %d  "
-                         "Index = %d Entry Num = %d\n",
-                         m_currentRuntimeCnt, m_currentRuntimeIndex,
-                         m_pprRuntimeIndex, repairEntryNum);
-        m_pprRuntimeData[m_pprRuntimeIndex].repairResult =
-            PPR_STATUS_REPAIR_NOT_PROCESSED;
-        m_pprRuntimeData[m_pprRuntimeIndex].repairEntryNum = repairEntryNum;
-        m_pprRuntimeData[m_pprRuntimeIndex].repairType = repairType;
-        m_pprRuntimeData[m_pprRuntimeIndex].socNum = socNum;
-        for (it = payload.begin(); it != payload.end(); it++)
-        {
-            m_pprRuntimeData[m_pprRuntimeIndex].payload[i] = *it;
-            i++;
-        }
-        if ((m_pprRuntimeIndex + globalBT->getBTindex()) < MAX_REPAIR_SLOTS)
-        {
-            m_pprRuntimeIndex++;
+            auto* ev = reinterpret_cast<struct inotify_event*>(p);
+            if ((ev->len > 0) && (ev->mask & IN_CLOSE_WRITE))
+            {
+                std::string name{ev->name};
+                if (name.size() > 11 &&
+                    name.compare(name.size() - 11, 11, "_rtppr.json") == 0)
+                {
+                    processFile(fs::path(m_watchDir) / name);
+                }
+            }
+            p += sizeof(struct inotify_event) + ev->len;
         }
     }
-    else
+}
+
+void RtPprManager::scanExistingFiles()
+{
+    std::error_code ec;
+    if (!fs::exists(m_watchDir, ec))
     {
-        index = globalBT->getBTindex();
-        sd_journal_print(LOG_INFO,
-                         "setPPRData: Boottime Entry Num = %d, Index = %d \n",
-                         repairEntryNum, index);
-        globalBT->setBTdata(true, BOOTTIME, repairEntryNum, repairType, socNum,
-                            PPR_STATUS_REPAIR_NOT_PROCESSED, payload);
+        lg2::info("RtPprManager: watch dir {DIR} does not exist yet, skipping scan",
+                  "DIR", m_watchDir);
+        return;
+    }
+
+    for (const auto& entry : fs::directory_iterator(m_watchDir, ec))
+    {
+        const std::string name = entry.path().filename().string();
+        if (name.size() <= 11 ||
+            name.compare(name.size() - 11, 11, "_rtppr.json") != 0)
+            continue;
+
+        fs::path statusPath =
+            entry.path().parent_path() /
+            (name.substr(0, name.size() - 5) + "_status.json");
+
+        if (fs::exists(statusPath))
+        {
+            lg2::info("RtPprManager: skipping already-processed {FILE}",
+                      "FILE", name);
+            continue;
+        }
+
+        lg2::info("RtPprManager: processing unhandled file on startup: {FILE}",
+                  "FILE", name);
+        processFile(entry.path());
+    }
+}
+
+void RtPprManager::processFile(const fs::path& rtpprPath)
+{
+    lg2::info("[RtPPR] BEGIN processFile: {FILE}",
+              "FILE", rtpprPath.filename().string());
+
+    std::vector<RtPprEntry> entries;
+    if (!parseRtPprJson(rtpprPath, entries))
+    {
+        lg2::error("[RtPPR] Failed to parse {FILE}, skipping",
+                   "FILE", rtpprPath.string());
+        return;
+    }
+
+    if (!sendRepairData(entries))
+    {
+        lg2::error("[RtPPR] sendRepairData failed for {FILE} â€” writing status anyway",
+                   "FILE", rtpprPath.filename().string());
+    }
+
+    pollRepairStatus(entries);
+    writeStatusFile(rtpprPath, entries);
+
+    lg2::info("[RtPPR] END processFile: {FILE}",
+              "FILE", rtpprPath.filename().string());
+}
+
+bool RtPprManager::parseRtPprJson(const fs::path& path,
+                                   std::vector<RtPprEntry>& entries)
+{
+    std::ifstream f(path);
+    if (!f.is_open())
+    {
+        lg2::error("RtPprManager: cannot open {FILE}", "FILE", path.string());
+        return false;
+    }
+
+    json j;
+    try { j = json::parse(f); }
+    catch (const json::exception& e)
+    {
+        lg2::error("RtPprManager: JSON parse error in {FILE}: {MSG}",
+                   "FILE", path.string(), "MSG", e.what());
+        return false;
+    }
+
+    if (!j.contains("pprDataIn") || !j["pprDataIn"].is_array())
+    {
+        lg2::error("RtPprManager: no 'pprDataIn' array in {FILE}",
+                   "FILE", path.string());
+        return false;
+    }
+
+    for (const auto& item : j["pprDataIn"])
+    {
+        RtPprEntry e;
+        e.repairEntryNum = item.value("RepairEntryNum", 0u);
+        e.repairType     = item.value("RepairType",     0u);
+        e.socNum         = item.value("SocNum",         0u);
+
+        if (!item.contains("Payload") || !item["Payload"].is_array())
+        {
+            lg2::error("RtPprManager: entry missing Payload in {FILE} â€” skipping",
+                       "FILE", path.string());
+            continue;
+        }
+        const auto& pl = item["Payload"];
+        for (int i = 0; i < PAYLOAD_SIZE && i < static_cast<int>(pl.size()); ++i)
+            e.payload[i] = static_cast<uint16_t>(pl[i].get<uint32_t>());
+
+        entries.push_back(e);
+    }
+
+    lg2::info("RtPprManager: parsed {N} PPR entries from {FILE}",
+              "N", entries.size(), "FILE", path.filename().string());
+    return !entries.empty();
+}
+
+bool RtPprManager::sendRepairData(std::vector<RtPprEntry>& entries)
+{
+    const size_t totalEntries = entries.size();
+
+    lg2::info("[RtPPR] sendRepairData: {N} entries", "N", totalEntries);
+
+    for (size_t ei = 0; ei < totalEntries; ++ei)
+    {
+        RtPprEntry& entry  = entries[ei];
+        bool        isLast = (ei == totalEntries - 1);
+
+        lg2::info("[RtPPR] Entry[{EI}] soc={S} repairType={T} "
+                  "payload=[{P0},{P1},{P2},{P3},{P4},{P5},{P6},{P7},{P8},{P9}]",
+                  "EI", ei, "S", entry.socNum, "T", entry.repairType,
+                  "P0", entry.payload[0], "P1", entry.payload[1],
+                  "P2", entry.payload[2], "P3", entry.payload[3],
+                  "P4", entry.payload[4], "P5", entry.payload[5],
+                  "P6", entry.payload[6], "P7", entry.payload[7],
+                  "P8", entry.payload[8], "P9", entry.payload[9]);
+
+        for (int offset = 0; offset < PAYLOAD_SIZE; ++offset)
+        {
+            struct set_ras_action_data_in Data{};
+            Data.payload.repair_entry_num =
+                static_cast<uint8_t>(entry.repairEntryNum);
+            Data.payload.offset   = static_cast<uint8_t>(offset * 2);
+            Data.payload.pay_load = entry.payload[offset];
+            Data.ras_act_id       = RAS_ACTION_ID_RUNTIME_PPR;
+            Data.eom_flag = (isLast && (offset == PAYLOAD_SIZE - 1)) ? 1 : 0;
+
+            uint32_t     status  = 0;
+            oob_status_t ret     = OOB_MAILBOX_ERR_END;
+            int          retries = m_maxRetries;
+
+            while (retries > 0)
+            {
+                ret = set_bmc_ras_action_status(
+                    static_cast<uint8_t>(entry.socNum), Data, &status);
+                if (ret == OOB_SUCCESS)
+                {
+                    lg2::info("[RtPPR] set_bmc_ras_action_status: soc={S} "
+                              "entry={E} offset={O} status=0x{ST}",
+                              "S", entry.socNum, "E", entry.repairEntryNum,
+                              "O", offset, "ST", lg2::hex, status);
+                    break;
+                }
+                --retries;
+                lg2::warning("[RtPPR] set_bmc_ras_action_status failed: "
+                             "soc={S} entry={E} offset={O} ret={R} left={RL}",
+                             "S", entry.socNum, "E", entry.repairEntryNum,
+                             "O", offset, "R", ret, "RL", retries);
+                usleep(static_cast<useconds_t>(m_retryDelayUs));
+            }
+
+            if (ret != OOB_SUCCESS)
+            {
+                lg2::error("[RtPPR] set_bmc_ras_action_status exhausted retries: "
+                           "soc={S} entry={E} offset={O}",
+                           "S", entry.socNum, "E", entry.repairEntryNum,
+                           "O", offset);
+                return false;
+            }
+        }
+    }
+
+    lg2::info("[RtPPR] sendRepairData: all {N} entries sent", "N", totalEntries);
+    return true;
+}
+
+bool RtPprManager::pollRepairStatus(std::vector<RtPprEntry>& entries)
+{
+    using clock = std::chrono::steady_clock;
+    const auto deadline =
+        clock::now() + std::chrono::milliseconds(m_statusPollTimeoutMs);
+
+    for (auto& entry : entries)
+    {
+        struct get_ras_action_data_in Data{};
+        Data.pay_load.repair_entry_num =
+            static_cast<uint8_t>(entry.repairEntryNum);
+        Data.ras_action_id = RAS_ACTION_ID_RUNTIME_PPR;
+
+        bool done        = false;
+        int  pollAttempt = 0;
+
+        lg2::info("[RtPPR] pollRepairStatus: soc={S} entry={E} timeout={T}ms",
+                  "S", entry.socNum, "E", entry.repairEntryNum,
+                  "T", m_statusPollTimeoutMs);
+
+        while (clock::now() < deadline)
+        {
+            struct ras_action_status status{};
+            oob_status_t ret = get_bmc_ras_action_status(
+                static_cast<uint8_t>(entry.socNum), Data, &status);
+            ++pollAttempt;
+
+            if (ret != OOB_SUCCESS)
+            {
+                lg2::warning("[RtPPR] get_bmc_ras_action_status failed: "
+                             "soc={S} entry={E} ret={R} attempt={A}",
+                             "S", entry.socNum, "E", entry.repairEntryNum,
+                             "R", ret, "A", pollAttempt);
+                usleep(static_cast<useconds_t>(m_retryDelayUs));
+                continue;
+            }
+
+            lg2::info("[RtPPR] poll attempt={A}: soc={S} entry={E} "
+                      "raw_result=0x{R}",
+                      "A", pollAttempt, "S", entry.socNum,
+                      "E", entry.repairEntryNum,
+                      "R", lg2::hex,
+                      static_cast<uint32_t>(status.repair_result));
+
+            if (status.repair_result !=
+                static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED))
+            {
+                entry.repairResult = status.repair_result;
+                lg2::info("[RtPPR] result after {A} poll(s): soc={S} "
+                          "entry={E} result=0x{R}",
+                          "A", pollAttempt, "S", entry.socNum,
+                          "E", entry.repairEntryNum,
+                          "R", lg2::hex,
+                          static_cast<uint32_t>(status.repair_result));
+                done = true;
+                break;
+            }
+
+            usleep(static_cast<useconds_t>(m_retryDelayUs));
+        }
+
+        if (!done)
+        {
+            lg2::error("[RtPPR] timed out waiting for PPR status: "
+                       "soc={S} entry={E}",
+                       "S", entry.socNum, "E", entry.repairEntryNum);
+        }
     }
 
     return true;
 }
 
-bool childPprData::recordAdd(bool value)
+void RtPprManager::writeStatusFile(const fs::path&              rtpprPath,
+                                    const std::vector<RtPprEntry>& entries)
 {
-    if (value == true)
+    const std::string origName  = rtpprPath.filename().string();
+    const std::string statusName =
+        origName.substr(0, origName.size() - 5) + "_status.json";
+    const fs::path statusPath = rtpprPath.parent_path() / statusName;
+
+    json j;
+    j["pprStatusOut"] = json::array();
+
+    for (const auto& e : entries)
     {
-        PprData::currentRepairEntry(m_pprRuntimeIndex);
-        sd_journal_print(LOG_INFO,
-                         "Record Added. Runtime Curr Cnt = %d , Curr Index = "
-                         "%d  Index = %d \n",
-                         m_currentRuntimeCnt, m_currentRuntimeIndex,
-                         m_pprRuntimeIndex);
-        value = false;
+        json item;
+        item["RepairEntryNum"]  = e.repairEntryNum;
+        item["RepairType"]      = e.repairType;
+        item["SocNum"]          = e.socNum;
+        item["RepairResult"]    = e.repairResult;
+        item["RepairResultStr"] =
+            (e.repairResult == PPR_STATUS_REPAIR_PASS)           ? "PASS"
+            : (e.repairResult == PPR_STATUS_REPAIR_FAIL)          ? "FAIL"
+            : (e.repairResult ==
+               static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED)) ? "NOT_PROCESSED"
+            : "UNKNOWN";
+        j["pprStatusOut"].push_back(item);
     }
-    return PprData::recordAdd(value, false);
+
+    std::ofstream f(statusPath);
+    if (!f.is_open())
+    {
+        lg2::error("RtPprManager: cannot write status file {FILE}",
+                   "FILE", statusPath.string());
+        return;
+    }
+    f << j.dump(4) << '\n';
+    lg2::info("RtPprManager: wrote status file {FILE}",
+              "FILE", statusPath.string());
 }
 
-uint16_t childPprData::GetRuntimeIndex(void)
-{
-    return m_pprRuntimeIndex;
-}
-
-std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
-    childPprData::getRuntimeData(uint16_t index, uint16_t slot)
-{
-
-    std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>
-        tup;
-
-    sd_journal_print(LOG_INFO,
-                     "getRuntimeData: - Begin , Index = %d, Slot = %d\n", index,
-                     slot);
-    std::vector<uint16_t> vec;
-
-    if ((m_pprRuntimeData[index].repairResult ==
-         PPR_STATUS_REPAIR_NOT_PROCESSED) &&
-        (slot < MAX_REPAIR_SLOTS))
-        updateRuntimeRepairStatus(index, slot);
-
-    for (int i = 0; i < PAYLOAD_SIZE; i++)
-        vec.push_back(m_pprRuntimeData[index].payload[i]);
-
-    sd_journal_print(LOG_INFO,
-                     "getRuntimeData(): Index = %d, repairEntryNum = %d, "
-                     "repairType = %d, socNum = %d, repairResult = 0x%x\n",
-                     index, m_pprRuntimeData[index].repairEntryNum,
-                     m_pprRuntimeData[index].repairType,
-                     m_pprRuntimeData[index].socNum,
-                     m_pprRuntimeData[index].repairResult);
-
-    tup = std::make_tuple(m_pprRuntimeData[index].repairEntryNum,
-                          m_pprRuntimeData[index].repairType,
-                          m_pprRuntimeData[index].socNum,
-                          m_pprRuntimeData[index].repairResult, vec);
-
-    sd_journal_print(LOG_INFO, "getRuntimeData: - End \n");
-
-    return tup;
-}
-
-std::vector<
-    std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, std::vector<uint16_t>>>
-    childPprData::getPostPackageRepairStatus()
-{
-
-    std::vector<std::tuple<uint16_t, uint16_t, uint16_t, uint16_t,
-                           std::vector<uint16_t>>>
-        Finalvec;
-    uint16_t slot = 0;
-    uint16_t BTindex;
-    sd_journal_print(LOG_INFO,
-                     "childPprData::getPostPackageRepairStatus() - Begin \n");
-
-    for (uint16_t index = 0; index < PprData::currentRepairEntry(); index++)
-    {
-        if (m_pprRuntimeData[index].repairResult ==
-            PPR_STATUS_REPAIR_NOT_PROCESSED)
-        {
-            Finalvec.push_back(getRuntimeData(index, slot));
-            slot++;
-        }
-        else
-            Finalvec.push_back(getRuntimeData(index, MAX_REPAIR_SLOTS));
-    }
-    BTindex = globalBT->getBTindex();
-    for (uint16_t index = 0; index < BTindex; index++)
-    {
-        Finalvec.push_back(globalBT->getBTdata(index));
-    }
-
-    return Finalvec;
-}
-
-bool childPprData::getConfigParam(uint16_t index)
-{
-    bool data = false;
-    switch (index)
-    {
-        case OOB_PPR_ENABLE_INDEX:
-            data = globalBT->getPprEnableStatus();
-            PprData::oobPprEnable(data, false);
-            break;
-        case RT_TO_BT_INDEX:
-            data = globalBT->getRtToBt();
-            PprData::rtToBt(data, false);
-            break;
-        case BT_SET_TO_HARD_INDEX:
-            data = globalBT->getBtSetToHard();
-            PprData::btSetToHard(data, false);
-            break;
-        default:
-            break;
-    }
-    return data;
-}
-std::vector<uint16_t> childPprData::getPostPackageRepairConfig()
-{
-    std::vector<uint16_t> FinalData = {0, 0, 0};
-    bool data;
-    uint16_t i;
-
-    sd_journal_print(LOG_INFO,
-                     "childPprData::getPostPackageRepairConfig() - Begin \n");
-
-    for (i = 0; i < MAX_PPR_CONFIG_INDEX; i++)
-    {
-        data = getConfigParam(i);
-        if (data)
-            FinalData[i] = PPR_CONFIG_TRUE;
-    }
-
-    return FinalData;
-}
-
-bool childPprData::setPostPackageRepairConfig(uint16_t flag, bool data)
-{
-    bool ret = true;
-
-    sd_journal_print(LOG_INFO,
-                     "setPostPackageRepairConfig() - flag 0x%x data 0x%x \n",
-                     flag, data);
-    if (flag & RT_TO_BT_MASK)
-    {
-        globalBT->updateConfigFile(RT_TO_BT, data);
-        PprData::rtToBt(data, false);
-    }
-    else if (flag & BT_SET_TO_HARD_MASK)
-    {
-        globalBT->updateConfigFile(BT_SET_TO_HARD, data);
-        PprData::btSetToHard(data, false);
-    }
-    else
-    {
-        ret = false;
-    }
-
-    return ret;
-}
-
-uint32_t childPprData::startRuntimeRepair(uint16_t repairSlot)
-{
-    uint8_t offset = 0;
-    oob_status_t ret_oob = OOB_MAILBOX_ERR_END;
-    struct set_ras_action_data_in Data;
-    uint16_t retryCount = MAX_RETRIES;
-    uint32_t status;
-    uint16_t slot;
-    uint16_t soc;
-
-    sd_journal_print(LOG_INFO,
-                     "startRuntimeRepair: Slot = %d Runtime Curr Cnt = %d\n",
-                     repairSlot, m_currentRuntimeCnt);
-    if (repairSlot < m_currentRuntimeCnt)
-    {
-        slot = repairSlot + m_currentRuntimeIndex;
-        sd_journal_print(
-            LOG_INFO,
-            "startRuntimeRepair: Begin Runtime Repair for Slot = %d\n", slot);
-        for (offset = 0; offset < PAYLOAD_SIZE; offset++)
-        {
-            if (globalBT->getMultiHostState())
-                soc = m_pprRuntimeData[slot].socNum;
-            else
-                soc = 0;
-            Data.payload.repair_entry_num = repairSlot;
-            Data.payload.offset = offset * 2;
-            Data.payload.pay_load = m_pprRuntimeData[slot].payload[offset];
-            Data.ras_act_id = RAS_ACTION_ID_RUNTIME_PPR;
-
-            Data.eom_flag = 0;
-            if ((offset == (PAYLOAD_SIZE - 1)) &&
-                ((m_currentRuntimeCnt - repairSlot) == 1))
-                Data.eom_flag = 1;
-
-            ret_oob = OOB_MAILBOX_ERR_END;
-            while (retryCount > 0)
-            {
-                ret_oob = set_bmc_ras_action_status(
-                    soc, Data, &status);
-
-                if (ret_oob == OOB_SUCCESS)
-                {
-                    sd_journal_print(LOG_INFO,
-                                     "set_bmc_ras_action_status = 0x%x \n",
-                                     status);
-                    break;
-                }
-
-                retryCount--;
-                sd_journal_print(LOG_WARNING,
-                                 "Set RAS Action PPR Runtime failed. Repair "
-                                 "Slot=%d, RetryCount=%d \n",
-                                 repairSlot, retryCount);
-            }
-        }
-
-        sd_journal_print(LOG_INFO,
-                         "childPprData::startRuntimeRepair() - End \n");
-    }
-    else
-    {
-        // Boottime PPR
-        ret_oob = OOB_SUCCESS;
-    }
-    return ret_oob;
-}
-
-uint32_t childPprData::updateRuntimeRepairStatus(uint16_t index, uint16_t slot)
-{
-
-    struct get_ras_action_data_in Data;
-    struct ras_action_status status;
-    uint16_t retryCount = MAX_RETRIES;
-    uint16_t soc;
-    oob_status_t ret_oob;
-
-    sd_journal_print(
-        LOG_INFO,
-        "updateRuntimeRepairStatus: Index = %d Slot = %d Curr Cnt = %d\n",
-        index, slot, m_currentRuntimeCnt);
-    if (slot < m_currentRuntimeCnt)
-    {
-        sd_journal_print(
-            LOG_INFO, "updateRuntimeRepairStatus: Begin Runtime Slot = %d \n",
-            slot);
-        Data.pay_load.repair_entry_num = slot;
-        Data.ras_action_id = RAS_ACTION_ID_RUNTIME_PPR;
-
-        ret_oob = OOB_MAILBOX_ERR_END;
-        if (globalBT->getMultiHostState())
-            soc = m_pprRuntimeData[index].socNum;
-        else
-            soc = 0;
-        while (retryCount > 0)
-        {
-            ret_oob = get_bmc_ras_action_status(soc,
-                                                Data, &status);
-
-            if (ret_oob == OOB_SUCCESS)
-            {
-                m_pprRuntimeData[index].repairResult = status.repair_result;
-                sd_journal_print(LOG_INFO,
-                                 "get_bmc_ras_action_status Repair Index = %d "
-                                 "Slot = %d, Repair Result = 0x%x \n",
-                                 index, slot, status.repair_result);
-                if ((m_currentRuntimeCnt - slot) == 1)
-                    m_currentRuntimeCnt = 0;
-
-                break;
-            }
-            usleep(200 * 1000);
-            retryCount--;
-            sd_journal_print(LOG_WARNING,
-                             "Get RAS Action PPR Runtime Status failed. Index "
-                             "= %d  Slot = %d  RetryCount = %d \n",
-                             index, slot, retryCount);
-        }
-
-        if (m_pprRuntimeData[index].repairResult == PPR_STATUS_REPAIR_PASS)
-        {
-            if (globalBT->getRtToBt())
-            { // Set BT from RT is enabled
-                SetBTfromRT((int)index);
-            }
-        }
-
-        sd_journal_print(LOG_INFO,
-                         "childPprData::updateRuntimeRepairStatus() - End \n");
-    }
-    else
-    { // Boot Time PPR
-        ret_oob = OOB_SUCCESS;
-    }
-    return ret_oob;
-}
