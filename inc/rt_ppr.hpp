@@ -291,6 +291,14 @@ class commonPPR
                    uint16_t repairType, uint16_t socNum, uint16_t result,
                    std::vector<uint16_t> payload)
     {
+        if (m_pprBoottimeIndex >= MAX_REPAIR_SLOTS)
+	{
+            sd_journal_print(
+                LOG_ERR,
+                "setBTdata: Maximum Boot-Time PPR slots (%d) reached",
+                MAX_REPAIR_SLOTS);
+            return;
+        }
         m_pprBoottimeData[m_pprBoottimeIndex].repairEntryNum = repairEntryNum;
         m_pprBoottimeData[m_pprBoottimeIndex].repairType = repairType;
         m_pprBoottimeData[m_pprBoottimeIndex].socNum = socNum;
@@ -567,6 +575,7 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_pprRuntimeIndex = 0;
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
+        m_rtToBtCount = 0;
         globalBT->setMultiHostState();
         globalBT->setBTindex(0);
         globalBT->readConfigFile();
@@ -622,6 +631,8 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     uint16_t m_pprRuntimeIndex;
     uint16_t m_currentRuntimeIndex;
     uint16_t m_currentRuntimeCnt;
+    uint16_t m_rtToBtCount;
+    uint16_t getTotalPprCount();
     void SetBTfromRT(int index);
     int GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip);
     uint16_t DimmSN0[MAX_DIMM_SLOT];
