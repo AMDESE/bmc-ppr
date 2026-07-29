@@ -3,6 +3,11 @@
 commonPPR* commonPPR::instance = 0;
 uint8_t DIMM_ADDR[MAX_DIMM_SLOT_PER_SOC]={7,3,5,1,6,2,4,0,15,11,13,9,14,10,12,8};
 
+uint16_t childPprData::getTotalPprCount()
+{
+    return (m_pprRuntimeIndex + globalBT->getBTindex() - m_rtToBtCount);
+}
+
 int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 {
     int dimm;
@@ -111,11 +116,18 @@ void childPprData::SetBTfromRT(int index)
     btIndex = globalBT->getBTindex();
     sd_journal_print(LOG_INFO, "setBTfromRT: Add Boottime Entry Index = %d \n",
                      btIndex);
+    if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+    {
+        sd_journal_print(
+            LOG_ERR, "SetBTfromRT: No free PPR slots available");
+        return;
+    }
     globalBT->setBTdata(
         true, RUNTIME, m_pprRuntimeData[index].repairEntryNum,
         (m_pprRuntimeData[index].repairType | PPR_TYPE_BOOTTIME_MASK),
         m_pprRuntimeData[index].socNum, PPR_STATUS_REPAIR_NOT_PROCESSED,
         payload);
+    m_rtToBtCount++;
 }
 void childPprData::deleteAll()
 {
@@ -135,6 +147,15 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
 
     if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
     {
+        if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "setPPRData: (RT) PPR Max request reached. "
+                "RuntimeIndex=%u BTIndex=%u RTtoBTcnt=%u Max=%u",
+                m_pprRuntimeIndex, globalBT->getBTindex(), m_rtToBtCount, MAX_REPAIR_SLOTS);
+            return false;
+        }
         if (m_currentRuntimeCnt == 0)
         {
             m_currentRuntimeIndex = m_pprRuntimeIndex;
@@ -163,14 +184,20 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
             m_pprRuntimeData[m_pprRuntimeIndex].payload[i] = *it;
             i++;
         }
-        if ((m_pprRuntimeIndex + globalBT->getBTindex()) < MAX_REPAIR_SLOTS)
-        {
-            m_pprRuntimeIndex++;
-        }
+        m_pprRuntimeIndex++;
     }
     else
     {
         index = globalBT->getBTindex();
+        if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "setPPRData: (BT) PPR Max request reached. "
+                "RuntimeIndex=%u BTIndex=%u Max=%u",
+                m_pprRuntimeIndex, globalBT->getBTindex(), MAX_REPAIR_SLOTS);
+            return false;
+        }
         sd_journal_print(LOG_INFO,
                          "setPPRData: Boottime Entry Num = %d, Index = %d \n",
                          repairEntryNum, index);
