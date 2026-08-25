@@ -130,9 +130,11 @@ class BootTimePprData
   public:
     commonPPR* globalBT = globalBT->getInstance();
 
-    BootTimePprData()
+    explicit BootTimePprData(void* hostBaseAddr) : hostBaseAddr(hostBaseAddr)
     {
-        sd_journal_print(LOG_INFO, "BootTimePprData: start Shared Mem Poll \n");
+        sd_journal_print(LOG_INFO,
+                         "BootTimePprData: host %d start Shared Mem Poll \n",
+                         globalBT->getHostId());
         pollSharedMem();
     }
 
@@ -141,6 +143,7 @@ class BootTimePprData
     }
 
   private:
+    void* hostBaseAddr = nullptr;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> pprBoottimeDataIn;
     std::array<PPR_Data, MAX_REPAIR_SLOTS> pprBoottimeDataOut;
     UINT8 BiosInCnt;
