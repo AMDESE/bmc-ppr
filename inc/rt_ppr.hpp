@@ -14,6 +14,7 @@
  // limitations under the License.
  */
 #pragma once
+#include <config.h>
 
 #include <iostream>
 #include <tuple> // for tuple
@@ -55,8 +56,11 @@ extern "C" {
 }
 
 #define PPR_DIR "/var/lib/amd-ppr/"
+#define BTJSON_FILE "BtPPRData.json"
+#define BTJsonFilePath "/var/lib/amd-ppr/BtPPRData.json"
 #define RTJSON_FILE "RtPPRData.json"
 #define RTJsonFilePath "/var/lib/amd-ppr/RtPPRData.json"
+#define config_file "/var/lib/amd-ppr/config.json"
 #define PPR_NODE "PprData"
 #define RUNTIME "RunTime"
 #define BOOTTIME "BootTime"
@@ -64,7 +68,7 @@ extern "C" {
 #define RT_TO_BT (2)
 #define BT_SET_TO_HARD (3)
 
-#include "ppr_host_config.hpp"
+extern void* base_addr;
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -204,40 +208,6 @@ class commonPPR
         return instance;
     }
 
-    void initForHost(int hostId, uint16_t socNum, const std::string& btJsonFile,
-                     const std::string& runtimeConfigFile)
-    {
-        m_hostId = hostId;
-        m_socNum = socNum;
-        m_btJsonFile = btJsonFile;
-        m_btJsonPath = std::string(PPR_DIR) + btJsonFile;
-        m_runtimeConfigFile = runtimeConfigFile;
-        m_useDedicatedSoc = (hostId > 0);
-    }
-
-    int getHostId() const
-    {
-        return m_hostId;
-    }
-
-    uint16_t getHostSocNum() const
-    {
-        return m_socNum;
-    }
-
-    uint16_t getApmlSocNum(uint16_t entrySocNum) const
-    {
-        if (m_useDedicatedSoc)
-        {
-            return m_socNum;
-        }
-        if (m_multiHostState)
-        {
-            return entrySocNum;
-        }
-        return 0;
-    }
-
     uint16_t getBTindex()
     {
         return m_pprBoottimeIndex;
@@ -270,11 +240,12 @@ class commonPPR
 
     void BtJsonRead()
     {
-        if (fs::exists(m_btJsonPath))
+        char filepath[] = BTJsonFilePath;
+        if (fs::exists(filepath))
         {
             try
             {
-                std::ifstream input(m_btJsonPath);
+                std::ifstream input(PPR_DIR BTJSON_FILE);
                 cereal::JSONInputArchive archive(input);
                 archive(BtPprJsonData);
             }
@@ -366,7 +337,16 @@ class commonPPR
                 pprObj.payload = payload;
                 // add ppr data in vector
                 BtPprJsonData.push_back(pprObj);
-                writeBtJsonFile();
+                // create json file
+                char filepath[] = BTJsonFilePath;
+                if (fs::exists(filepath))
+                {
+                    std::remove(filepath);
+                    sleep(JSON_SLEEP_TIME);
+                }
+                std::ofstream output(PPR_DIR BTJSON_FILE);
+                cereal::JSONOutputArchive oarchive(output);
+                oarchive(cereal::make_nvp(PPR_NODE, BtPprJsonData));
             }
             catch (cereal::Exception& e)
             {
@@ -404,8 +384,16 @@ class commonPPR
             }
 
             if (update)
-            {
-                writeBtJsonFile();
+            { // create json file
+                char filepath[] = BTJsonFilePath;
+                if (fs::exists(filepath))
+                {
+                    std::remove(filepath);
+                    sleep(JSON_SLEEP_TIME);
+                }
+                std::ofstream output(PPR_DIR BTJSON_FILE);
+                cereal::JSONOutputArchive oarchive(output);
+                oarchive(cereal::make_nvp(PPR_NODE, BtPprJsonData));
             }
         }
         catch (cereal::Exception& e)
@@ -414,18 +402,6 @@ class commonPPR
                              "UpdateBtResult: Failed to write json file  %s \n",
                              e.what());
         }
-    }
-
-    void writeBtJsonFile()
-    {
-        if (fs::exists(m_btJsonPath))
-        {
-            std::remove(m_btJsonPath.c_str());
-            sleep(JSON_SLEEP_TIME);
-        }
-        std::ofstream output(m_btJsonPath);
-        cereal::JSONOutputArchive oarchive(output);
-        oarchive(cereal::make_nvp(PPR_NODE, BtPprJsonData));
     }
 
     bool getPprEnableStatus()
@@ -468,7 +444,7 @@ class commonPPR
     {
         bool tmp;
 
-        std::ifstream jsonRead(m_runtimeConfigFile);
+        std::ifstream jsonRead(config_file);
         nlohmann::json data = nlohmann::json::parse(jsonRead);
 
         tmp = false;
@@ -490,7 +466,7 @@ class commonPPR
     {
         bool tmp;
 
-        std::ifstream jsonRead(m_runtimeConfigFile);
+        std::ifstream jsonRead(config_file);
         nlohmann::json data = nlohmann::json::parse(jsonRead);
 
         switch (param)
@@ -526,7 +502,7 @@ class commonPPR
                 break;
         }
 
-        std::ofstream jsonWrite(m_runtimeConfigFile);
+        std::ofstream jsonWrite(config_file);
         jsonWrite << data;
 
         jsonRead.close();
@@ -576,12 +552,6 @@ class commonPPR
     }
 
   private:
-    int m_hostId = 0;
-    uint16_t m_socNum = 0;
-    bool m_useDedicatedSoc = false;
-    std::string m_btJsonFile;
-    std::string m_btJsonPath;
-    std::string m_runtimeConfigFile;
     uint16_t m_pprBoottimeIndex;
     bool m_oobPprEnable;
     bool m_RtToBt;
@@ -606,10 +576,7 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
         m_rtToBtCount = 0;
-        if (globalBT->getHostId() == 0)
-        {
-            globalBT->setMultiHostState();
-        }
+        globalBT->setMultiHostState();
         globalBT->setBTindex(0);
         globalBT->readConfigFile();
         getConfigParam(OOB_PPR_ENABLE_INDEX);

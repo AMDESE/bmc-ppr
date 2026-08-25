@@ -1,42 +1,100 @@
 #include "bt_ppr.hpp"
-#include "ppr_host_config.hpp"
 #include "rt_ppr.hpp"
 
-#include <cstdlib>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <thread>
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <sys/stat.h>
-
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 
-static void createRuntimeConfigFile(int hostId)
+// Optional custom configuration file
+const std::string configFilePath = "/usr/share/amd-ppr/ppr-config.json";
+
+// default values for PPR Config (SP5)
+std::string bmcDev = "/dev/bmc-device";
+std::string indexFile =
+    "/sys/devices/platform/ahb/ahb:apb/1e7e0000.bmc_dev/bmc-dev-queue2";
+
+static boost::asio::io_context io;
+std::shared_ptr<sdbusplus::asio::connection> conn;
+void* base_addr;
+
+int loadConfigData()
 {
-    struct stat buffer;
-    const std::string path = getRuntimeConfigPath(hostId);
 
-    if (stat(path.c_str(), &buffer) != 0)
+    std::ifstream configFile(configFilePath.c_str());
+    if (!configFile.is_open())
     {
-        sd_journal_print(LOG_INFO, "PPR host %d: created runtime config %s\n",
-                         hostId, path.c_str());
-        nlohmann::json jsonConfig = {{"oobPprEnable", false},
-                                     {"RtToBt", true},
-                                     {"BtSetToHard", false}};
+        // Use default Configuration
+        sd_journal_print(LOG_INFO, "PPR loadConfigData: Config file not "
+                                   "present, use default config \n");
+        return 0;
+    }
 
-        std::ofstream jsonWrite(path);
+    try
+    {
+        sd_journal_print(LOG_INFO, "PPR Config Data file: %s \n",
+                         configFilePath.c_str());
+        auto jsonData = nlohmann::json::parse(configFile, nullptr, true, true);
+        if (jsonData.is_discarded())
+        {
+            sd_journal_print(LOG_ERR, "PPR Config Data Json parser failure \n");
+            return -1;
+        }
+
+        auto pprConfig = jsonData["ppr_configs"];
+
+        // Update PPR Config data
+        bmcDev = pprConfig["bmcDev"];
+        sd_journal_print(LOG_INFO, "PPR: bmcDev= %s \n", bmcDev.c_str());
+        indexFile = pprConfig["indexFile"];
+    }
+    catch (const std::exception& e)
+    {
+        sd_journal_print(LOG_ERR,
+                         "PPR Config Data(%s) Json parser failure: %s \n",
+                         configFilePath.c_str(), e.what());
+        return -1;
+    }
+
+    return 0;
+}
+
+void CreateConfigFile()
+{
+
+    struct stat buffer;
+
+    // Create PPR Config file
+    if (stat(config_file, &buffer) != 0)
+    {
+        sd_journal_print(LOG_INFO, "New PPR Config file created\n");
+        nlohmann::json jsonConfig = {
+            {"oobPprEnable", false},
+            {"RtToBt", true},
+            {"BtSetToHard", false},
+        };
+
+        std::ofstream jsonWrite(config_file);
         jsonWrite << jsonConfig;
+        jsonWrite.close();
     }
 }
 
-static void createPprDir()
+void CreatePprDir()
 {
+    int dir;
     struct stat buffer;
 
     if (stat(kPprDir.data(), &buffer) != 0)
     {
-        if (mkdir(kPprDir.data(), 0777) != 0)
+        // PPR Dir does not exist, create it
+        dir = mkdir(kPprDir.data(), 0777);
+        if (dir != 0)
         {
             sd_journal_print(LOG_ERR, "PPR directory not created\n");
         }
@@ -47,9 +105,55 @@ static void createPprDir()
     }
 }
 
-static void readHostQueue2(void* hostBaseAddr, const std::string& queue2Path)
+// Initialize Shared Memory device
+void InitHostSharedMem()
 {
-    BootTimePprData* btPpr = nullptr;
+    sd_journal_print(LOG_DEBUG, "InitHostSharedMem Start  \n");
+    base_addr = NULL;
+    size_t sdev = (MEMBAR_BUFFER_LENGTH * MEMBAR_BUFFER_LENGTH);
+    int mfd;
+    struct stat sb;
+
+    try
+    {
+        if (stat(bmcDev.c_str(), &sb) == 0)
+        {
+            mfd = open(bmcDev.c_str(), O_RDWR | O_SYNC);
+            base_addr =
+                mmap(0, sdev, PROT_READ | PROT_WRITE, MAP_SHARED, mfd, 0);
+            if (base_addr == MAP_FAILED)
+            {
+                sd_journal_print(
+                    LOG_ERR, "InitHostSharedMem: Error Buffer map failed  \n");
+            }
+            else
+            {
+                base_addr = (UINT8*)base_addr + PPR_SM_OFFSET;
+            }
+            close(mfd);
+        }
+        else
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "InitHostSharedMem: Error BMC Device does not exist \n");
+        }
+    }
+    catch (std::exception& e)
+    {
+        sd_journal_print(
+            LOG_ERR, "InitHostSharedMem: Error getting membar value for: %s \n",
+            e.what());
+    }
+
+    sd_journal_print(LOG_INFO, "InitHostSharedMem End with Base Addr = %p \n",
+                     base_addr);
+    return;
+}
+
+void ReadHostQueue2()
+{
+    BootTimePprData* btPpr = NULL;
 #ifdef BMC_DEV_IRQ
     int fd = -1;
     char buff[Q2_READ_CNT];
@@ -57,95 +161,95 @@ static void readHostQueue2(void* hostBaseAddr, const std::string& queue2Path)
 
     while (1)
     {
-        fd = open(queue2Path.c_str(), O_RDWR, 0);
+        sd_journal_print(LOG_INFO, " ReadHostQueue2: Start \n");
+
+        fd = open(indexFile.c_str(), O_RDWR, 0);
         if (fd < 0)
         {
             sd_journal_print(LOG_ERR,
-                             "ReadHostQueue2 host %d: failed to open %s\n",
-                             g_hostConfig.hostId, queue2Path.c_str());
-            sleep(TSLEEP);
-            continue;
+                             " ReadHostQueue2: Failed to Open Que 2\n");
+            close(fd);
+            exit(-1);
         }
 
         ret = read(fd, buff, Q2_READ_CNT);
-        if (ret >= 0 && (buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
-            (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG))
+        if (ret < 0)
         {
-            if (btPpr != nullptr)
+            sd_journal_print(
+                LOG_ERR, " ReadHostQueue2: Read Failed with return %d \n", (int)ret);
+        }
+        else
+        {
+            sd_journal_print(LOG_INFO,
+                             " ReadHostQueue2:Read return Data 0x%x "
+                             "0x%x 0x%x 0x%x \n",
+                             buff[0], buff[1], buff[2], buff[3]);
+            if ((buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
+                (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG))
             {
-                delete btPpr;
+                if (btPpr != NULL)
+                    delete btPpr;
+                btPpr = new BootTimePprData();
             }
-            btPpr = new BootTimePprData(hostBaseAddr);
         }
         close(fd);
         sleep(1);
-    }
+    } // end of while
 #else
-    (void)queue2Path;
-    if (btPpr == nullptr)
+    if (btPpr == NULL)
     {
-        sd_journal_print(LOG_INFO, "ReadHostQueue2 host %d: start BT poll\n",
-                         g_hostConfig.hostId);
-        btPpr = new BootTimePprData(hostBaseAddr);
+        sd_journal_print(LOG_INFO, " ReadHostQueue2: start BT Poll \n");
+        btPpr = new BootTimePprData();
     }
 #endif
 }
 
-int main(int argc, char* argv[])
+int main()
 {
-    if (argc < 2)
+    // read PPR configuration JSON file
+    if (loadConfigData() < 0)
     {
-        sd_journal_print(LOG_ERR, "amd-bmc-ppr: host instance id required\n");
-        return EXIT_FAILURE;
+        sd_journal_print(LOG_ERR, "Can't open json config file %s !\n",
+                         configFilePath.c_str());
+        return 0;
     }
 
-    const int hostId = std::atoi(argv[1]);
-    if (hostId < 0 || hostId > 2)
-    {
-        sd_journal_print(LOG_ERR, "amd-bmc-ppr: invalid host id %d\n", hostId);
-        return EXIT_FAILURE;
-    }
+    // connect to dbus
+    conn = std::make_shared<sdbusplus::asio::connection>(io);
 
-    if (loadHostConfig(hostId) < 0)
-    {
-        return EXIT_FAILURE;
-    }
+    commonPPR* globalBT = globalBT->getInstance();
 
-    commonPPR* globalBT = commonPPR::getInstance();
-    globalBT->initForHost(hostId, g_hostConfig.socNum, g_hostConfig.btJsonFile,
-                          g_hostConfig.runtimeConfigFile);
-
-    createPprDir();
-    createRuntimeConfigFile(hostId);
-
-    g_hostConfig.baseAddr = initHostSharedMem(g_hostConfig.bmcDev);
-    sd_journal_print(LOG_INFO, "PPR host %d: shared mem base %p\n", hostId,
-                     g_hostConfig.baseAddr);
+    int ret = 0;
 
     sd_event* event = nullptr;
-    int ret = sd_event_default(&event);
+
+    CreatePprDir();
+    CreateConfigFile();
+
+    InitHostSharedMem();
+
+    ret = sd_event_default(&event);
     if (ret < 0)
     {
-        sd_journal_print(LOG_ERR, "Error creating sd_event handler");
+        sd_journal_print(LOG_ERR, "Error creating a default sd_event handler");
         return ret;
     }
 
+    // events
     EventPtr eventP{event};
     event = nullptr;
 
     sdbusplus::bus::bus bus = sdbusplus::bus::new_default();
-    sdbusplus::server::manager_t m{bus, g_hostConfig.dbusObjectPath.c_str()};
 
-    bus.request_name(g_hostConfig.dbusServiceName.c_str());
+    sdbusplus::server::manager_t m{bus, DBUS_OBJECT_NAME};
 
-    childPprData rtPprData{bus, g_hostConfig.dbusObjectPath.c_str(), eventP};
+    bus.request_name(DBUS_SERVICE_NAME);
 
-    sd_journal_print(LOG_INFO, "PPR host %d: D-Bus %s %s\n", hostId,
-                     g_hostConfig.dbusServiceName.c_str(),
-                     g_hostConfig.dbusObjectPath.c_str());
+    childPprData RtPprData{bus, DBUS_OBJECT_NAME, eventP};
 
-    std::thread h2bQ2Thread(readHostQueue2, g_hostConfig.baseAddr,
-                            g_hostConfig.indexFile);
+    sd_journal_print(LOG_DEBUG, "Created PPR Data Object \n");
+
+    std::thread h2bQ2Thread(ReadHostQueue2);
     h2bQ2Thread.detach();
 
     try
@@ -155,15 +259,14 @@ int main(int argc, char* argv[])
         if (ret < 0)
         {
             sd_journal_print(LOG_ERR,
-                             "Error occurred during sd_event_loop, RET=%d",
+                             "Error occurred during the sd_event_loop, RET=%d",
                              ret);
         }
     }
-    catch (const std::exception& e)
+    catch (std::exception& e)
     {
         sd_journal_print(LOG_ERR, "Error:%s", e.what());
-        return EXIT_FAILURE;
+        return -1;
     }
-
     return 0;
 }

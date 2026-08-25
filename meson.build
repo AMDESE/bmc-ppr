@@ -11,9 +11,17 @@ project(
 )
 
 
+conf_data = configuration_data()
+conf_data.set_quoted('DBUS_OBJECT_NAME', '/xyz/openbmc_project/PostPackageRepair')
+conf_data.set_quoted('DBUS_SERVICE_NAME','xyz.openbmc_project.PostPackageRepair')
+
 cpp_args = []
 
 cpp = meson.get_compiler('cpp')
+
+configure_file(output: 'config.h',
+  configuration: conf_data
+)
 
 if (get_option('bmc_dev_irq').enabled())
   add_project_arguments('-DBMC_DEV_IRQ', language:'cpp')
@@ -36,7 +44,6 @@ deps = [
 executable(
   'amd-bmc-ppr',
   'src/main.cpp',
-  'src/ppr_host_config.cpp',
   'src/rt_ppr.cpp',
   'src/bt_ppr.cpp',
   include_directories: include_directories('inc'),
@@ -48,7 +55,7 @@ executable(
 systemd = dependency('systemd')
 
 install_data(
-  ['service_files/xyz.openbmc_project.PostPackageRepair@.service'],
+  ['service_files/xyz.openbmc_project.PostPackageRepair.service'],
   install_dir: systemd.get_pkgconfig_variable('systemdsystemunitdir')
 )
 
