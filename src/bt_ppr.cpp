@@ -29,12 +29,12 @@ bool BootTimePprData::getBiosInData()
     UINT32 Signature;
     UINT8 Command;
 
-    sd_journal_print(LOG_INFO, "getBiosInData Start 0x%p", base_addr);
+    sd_journal_print(LOG_INFO, "getBiosInData Start 0x%p", hostBaseAddr);
     BiosInCnt = 0;
-    if (base_addr != NULL)
+    if (hostBaseAddr != NULL)
     {
         BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
-        BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
+        BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)hostBaseAddr);
 
         if (BiosPprHeader_ptr != NULL)
         {
@@ -88,7 +88,7 @@ void BootTimePprData::pollSharedMem()
 {
 #ifdef BMC_DEV_IRQ
     uint32_t retry = 0;
-    if (base_addr != NULL)
+    if (hostBaseAddr != NULL)
     {
         while ((false == getBiosInData()) && (retry < MAX_RETRY))
         {
@@ -97,7 +97,7 @@ void BootTimePprData::pollSharedMem()
         }
     }
 #else
-    if (base_addr != NULL)
+    if (hostBaseAddr != NULL)
     {
         while (1)
         {
@@ -121,13 +121,13 @@ void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
 
         for (int i = 0; i < (int)entryCount; i++)
         {
-            char c = ((unsigned char*)base_addr)[index];
+            char c = ((unsigned char*)hostBaseAddr)[index];
             sprintf(buffer, "%d", c);
             uint8_t type = stoi(buffer);
             if (type == BOOTTIME_PPR_TYPE)
             {
                 BiosPprData_ptr =
-                    (struct BiosPprData*)((UINT8*)base_addr + index);
+                    (struct BiosPprData*)((UINT8*)hostBaseAddr + index);
                 pprBoottimeDataIn[i].repairEntryNum =
                     BiosPprData_ptr->RepairEntryNumber;
                 pprBoottimeDataIn[i].repairType = BiosPprData_ptr->RepairType;
@@ -169,22 +169,28 @@ UINT8 BootTimePprData::setBiosOutData()
     {
         tup = globalBT->getBTdata(i);
 
-        pprBoottimeDataOut[i].repairEntryNum = std::get<0>(tup);
-        pprBoottimeDataOut[i].repairType = std::get<1>(tup);
-        pprBoottimeDataOut[i].socNum = std::get<2>(tup);
-        pprBoottimeDataOut[i].repairResult = std::get<3>(tup);
+        if (globalBT->getHostId() > 0 &&
+            std::get<2>(tup) != globalBT->getHostSocNum())
+        {
+            continue;
+        }
+
+        pprBoottimeDataOut[ret].repairEntryNum = std::get<0>(tup);
+        pprBoottimeDataOut[ret].repairType = std::get<1>(tup);
+        pprBoottimeDataOut[ret].socNum = std::get<2>(tup);
+        pprBoottimeDataOut[ret].repairResult = std::get<3>(tup);
         vec = std::get<std::vector<uint16_t>>(tup);
         for (j = 0; j < PAYLOAD_SIZE; j++)
         {
-            pprBoottimeDataOut[i].payload[j] = vec[j];
+            pprBoottimeDataOut[ret].payload[j] = vec[j];
         }
         sd_journal_print(LOG_INFO,
                          "BIOS Out Data: Index %d  Type 0x%x Entry Num 0x%x "
                          "SOC 0x%x Payload %d \n",
-                         i, pprBoottimeDataOut[i].repairType,
-                         pprBoottimeDataOut[i].repairEntryNum,
-                         pprBoottimeDataOut[i].socNum,
-                         pprBoottimeDataOut[i].payload[0]);
+                         i, pprBoottimeDataOut[ret].repairType,
+                         pprBoottimeDataOut[ret].repairEntryNum,
+                         pprBoottimeDataOut[ret].socNum,
+                         pprBoottimeDataOut[ret].payload[0]);
         ret++;
     }
     return ret;
@@ -260,7 +266,7 @@ void BootTimePprData::WriteHostSharedMem()
         BiosOutCnt, BiosInCnt);
 
     // Header
-    BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
+    BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)hostBaseAddr);
 
     BiosPprHeader_ptr->Signature = BOOTTIME_PPR_SIGNATURE;
     BiosPprHeader_ptr->Version = BOOTTIME_PPR_VERSION;
@@ -278,7 +284,7 @@ void BootTimePprData::WriteHostSharedMem()
             {
                 sd_journal_print(LOG_INFO, "WriteHostSharedMem write Payload i=%d ", i);
                 BiosPprData_ptr =
-                    (struct BiosPprData*)((UINT8*)base_addr + index);
+                    (struct BiosPprData*)((UINT8*)hostBaseAddr + index);
                 BiosPprData_ptr->Type = BOOTTIME_PPR_TYPE;
                 BiosPprData_ptr->Version = BOOTTIME_PPR_VERSION;
                 BiosPprData_ptr->Length = PPR_BT_DATA_SIZE;
