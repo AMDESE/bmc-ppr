@@ -1,7 +1,6 @@
 #include "rt_ppr.hpp"
 
 commonPPR* commonPPR::instance = 0;
-uint8_t DIMM_ADDR[MAX_DIMM_SLOT_PER_SOC]={7,3,5,1,6,2,4,0,15,11,13,9,14,10,12,8};
 
 uint16_t childPprData::getTotalPprCount()
 {
@@ -20,18 +19,16 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     {
         return MAX_DIMM_SLOT;
     }
-    dimmAddr = (uint8_t)(DIMM_ADDR[dimm] + DIMM_SN_MODE_1);
-
-    if (Socket == DIMM_SOCKET_0)
-    { // Socket 0
-        if (Chip >= DIMM_CHIP_2DPC)
-        { // 2 DPC
-            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-            dimmAddr = dimmAddr + DIMM_SN_2DPC;
-        }
+    // SMU addresses the DIMM SPD hub by UMC channel:
+    // [3:0] channel, [4] second DIMM of a 2DPC channel, [7] SPD access mode.
+    dimmAddr = (uint8_t)(dimm | DIMM_SN_MODE_1);
+    if (Chip >= DIMM_CHIP_2DPC)
+    { // 2 DPC, both sockets
+        dimmAddr = (uint8_t)(dimmAddr | DIMM_SN_2DPC);
     }
-    else
-    { // socket 1
+
+    if ((Socket != DIMM_SOCKET_0) || (Chip >= DIMM_CHIP_2DPC))
+    {
         dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
     }
 
@@ -51,9 +48,10 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     }
     else
     {
-        sd_journal_print(
-            LOG_INFO, "GetDimmSerialNum: Error getting DIMM SN for %d %d  \n",
-            dimm, dimmAddr);
+        sd_journal_print(LOG_ERR,
+                         "GetDimmSerialNum: Error getting DIMM SN for %d "
+                         "Addr = 0x%x ret = %d (%s) \n",
+                         dimm, dimmAddr, ret_oob, esmi_get_err_msg(ret_oob));
         DimmSN0[dimm] = 0;
         DimmSN1[dimm] = 0;
     }
