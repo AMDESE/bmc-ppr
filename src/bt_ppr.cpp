@@ -33,8 +33,7 @@ bool BootTimePprData::getBiosInData()
     BiosInCnt = 0;
     if (base_addr != NULL)
     {
-        BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
-        BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
+        struct BiosPprHeader* BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
 
         if (BiosPprHeader_ptr != NULL)
         {
@@ -117,7 +116,7 @@ void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
     {
         UINT8 index = PPR_BT_HEADER_SIZE;
         char buffer[CMD_BUFF_LEN];
-        BiosPprData* BiosPprData_ptr = new BiosPprData();
+        struct BiosPprData* BiosPprData_ptr = nullptr;
 
         for (int i = 0; i < (int)entryCount; i++)
         {
@@ -242,8 +241,8 @@ void BootTimePprData::WriteHostSharedMem()
 {
     UINT8 index = PPR_BT_HEADER_SIZE;
     UINT8 outCnt = 0;
-    BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
-    BiosPprData* BiosPprData_ptr = new BiosPprData();
+    struct BiosPprHeader* BiosPprHeader_ptr = nullptr;
+    struct BiosPprData* BiosPprData_ptr = nullptr;
 
     // Get BT PPR Data
     BiosOutCnt = setBiosOutData();
