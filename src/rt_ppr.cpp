@@ -1,7 +1,55 @@
 #include "rt_ppr.hpp"
 
 commonPPR* commonPPR::instance = 0;
-uint8_t DIMM_ADDR[MAX_DIMM_SLOT_PER_SOC]={7,3,5,1,6,2,4,0,15,11,13,9,14,10,12,8};
+// SP5 / SP7 16-channel mapping table
+static const uint8_t DIMM_ADDR_SP7[MAX_DIMM_SLOT_PER_SOC] = {
+    7, 3, 5, 1, 6, 2, 4, 0, 15, 11, 13, 9, 14, 10, 12, 8};
+
+// SP8 BIOS runtime PPR payload channel (0..7) to Package Physical Channel (APML offset 0..7)
+static const uint8_t DIMM_ADDR_SP8[MAX_DIMM_SLOT_PER_SOC] = {
+    3, 1, 2, 0, 7, 5, 6, 4,
+    0, 0, 0, 0, 0, 0, 0, 0};
+
+// Family 1Ah, Model 90h-9Bh (SP8). SP7 WH is Family 1Ah, Model 50h-5Fh.
+const uint32_t SP8_PROC_FAMILY = 0x1A;
+const uint32_t SP8_PROC_MODEL_MIN = 0x90;
+const uint32_t SP8_PROC_MODEL_MAX = 0x9B;
+
+// -1 unknown, 0 SP7 map, 1 SP8 map. Failures are not cached.
+static int dimmMapIsSp8 = -1;
+
+static bool useSp8DimmMap(uint16_t socket)
+{
+    struct processor_info procInfo = {};
+    oob_status_t ret;
+
+    if (dimmMapIsSp8 >= 0)
+    {
+        return dimmMapIsSp8 == 1;
+    }
+
+    ret = esmi_get_processor_info((uint8_t)socket, &procInfo);
+    if (ret != OOB_SUCCESS)
+    {
+        sd_journal_print(LOG_ERR,
+                         "GetDimmSerialNum: processor info failed (%d), "
+                         "using SP7 DIMM map\n",
+                         ret);
+        return false;
+    }
+
+    dimmMapIsSp8 = (procInfo.family == SP8_PROC_FAMILY &&
+                    procInfo.model >= SP8_PROC_MODEL_MIN &&
+                    procInfo.model <= SP8_PROC_MODEL_MAX)
+                       ? 1
+                       : 0;
+    sd_journal_print(LOG_INFO,
+                     "GetDimmSerialNum: family 0x%x model 0x%x -> %s "
+                     "DIMM map\n",
+                     procInfo.family, procInfo.model,
+                     dimmMapIsSp8 ? "SP8" : "SP7");
+    return dimmMapIsSp8 == 1;
+}
 
 uint16_t childPprData::getTotalPprCount()
 {
@@ -15,12 +63,29 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     uint32_t dimmData;
     oob_status_t ret_oob;
 
+    bool sp8 = useSp8DimmMap(Socket);
+
     dimm = (Ch & DIMM_SN_CH_MASK);
     if (dimm >= MAX_DIMM_SLOT_PER_SOC)
     {
+        sd_journal_print(LOG_ERR,
+                         "GetDimmSerialNum: Invalid channel %d\n",
+                         Ch);
         return MAX_DIMM_SLOT;
     }
-    dimmAddr = (uint8_t)(DIMM_ADDR[dimm] + DIMM_SN_MODE_1);
+
+    if (sp8)
+    {
+        dimmAddr = (uint8_t)(DIMM_ADDR_SP8[dimm] + DIMM_SN_MODE_1);
+    }
+    else
+    {
+        dimmAddr = (uint8_t)(DIMM_ADDR_SP7[dimm] + DIMM_SN_MODE_1);
+    }
+
+    sd_journal_print(LOG_INFO,
+                     "GetDimmSerialNum [%s]: Socket %d Ch %d -> dimm %d Addr 0x%02x\n",
+                     sp8 ? "SP8" : "SP7", Socket, Ch, dimm, dimmAddr);
 
     if (Socket == DIMM_SOCKET_0)
     { // Socket 0
