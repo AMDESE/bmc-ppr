@@ -66,7 +66,11 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_BMC_CNT)
                 {
+                    /* Mailbox already holds the BMC reply. Polling cannot
+                     * observe a new BIOS command until BIOS rewrites it.
+                     */
                     sd_journal_print(LOG_INFO, "getBiosInData BMC Signature");
+                    return true;
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {
