@@ -24,12 +24,24 @@
 BootTimePprDataHolder* BootTimePprDataHolder::instance = 0;
 using namespace std;
 
+bool isBiosRequestPending()
+{
+    if (base_addr == NULL)
+        return false;
+
+    volatile struct BiosPprHeader* hdr =
+        (volatile struct BiosPprHeader*)base_addr;
+
+    return (hdr->Signature == BOOTTIME_PPR_SIGNATURE) &&
+           (hdr->Command == BT_PPR_CMD_BIOS_CNT);
+}
+
 bool BootTimePprData::getBiosInData()
 {
     UINT32 Signature;
     UINT8 Command;
 
-    sd_journal_print(LOG_INFO, "getBiosInData Start 0x%p", base_addr);
+    sd_journal_print(LOG_DEBUG, "getBiosInData Start 0x%p", base_addr);
     BiosInCnt = 0;
     if (base_addr != NULL)
     {
@@ -43,7 +55,8 @@ bool BootTimePprData::getBiosInData()
             if (Signature == BOOTTIME_PPR_SIGNATURE)
             {
                 sd_journal_print(
-                    LOG_INFO, "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
+                    (Command == BT_PPR_CMD_BMC_CNT) ? LOG_DEBUG : LOG_INFO,
+                    "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
                     Signature, BiosInCnt, Command);
 
                 if (Command == BT_PPR_CMD_BIOS_CNT)
@@ -66,11 +79,9 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_BMC_CNT)
                 {
-                    /* Mailbox already holds the BMC reply. Polling cannot
-                     * observe a new BIOS command until BIOS rewrites it.
-                     */
-                    sd_journal_print(LOG_INFO, "getBiosInData BMC Signature");
-                    return true;
+                    // Our own reply is still in the mailbox; keep waiting.
+                    // Do not return true here.
+                    sd_journal_print(LOG_DEBUG, "getBiosInData BMC Signature");
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {

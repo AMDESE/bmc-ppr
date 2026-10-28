@@ -155,3 +155,5 @@ class BootTimePprData
     void WriteHostSharedMem();
     UINT8 compareBiosData();
 };
+
+bool isBiosRequestPending();
