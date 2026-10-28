@@ -187,6 +187,25 @@ void ReadHostQueue2()
             if ((buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
                 (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG))
             {
+                /* Writing the BMC reply retriggers queue2 with 0x81.
+                 * Do not start another poll while the mailbox still
+                 * holds that reply.
+                 */
+                if (base_addr != NULL)
+                {
+                    BiosPprHeader* hdr =
+                        (struct BiosPprHeader*)((UINT8*)base_addr);
+                    if ((hdr->Signature == BOOTTIME_PPR_SIGNATURE) &&
+                        (hdr->Command == BT_PPR_CMD_BMC_CNT))
+                    {
+                        sd_journal_print(LOG_INFO,
+                                         " ReadHostQueue2: mailbox already "
+                                         "has BMC reply, skip poll\n");
+                        close(fd);
+                        sleep(1);
+                        continue;
+                    }
+                }
                 if (btPpr != NULL)
                     delete btPpr;
                 btPpr = new BootTimePprData();
