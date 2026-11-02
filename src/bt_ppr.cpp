@@ -155,7 +155,7 @@ void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
 {
     if (entryCount > 0)
     {
-        UINT8 index = PPR_BT_HEADER_SIZE;
+        uint32_t index = PPR_BT_HEADER_SIZE;
         char buffer[CMD_BUFF_LEN];
         struct BiosPprData* BiosPprData_ptr = nullptr;
 
@@ -250,13 +250,8 @@ UINT8 BootTimePprData::compareBiosData()
                 if ((pprBoottimeDataOut[i].payload[k] & payloadMask[k]) !=
                     (pprBoottimeDataIn[j].payload[k] & payloadMask[k]))
                 {
-                    sd_journal_print(LOG_INFO,
-                                     "compareBiosData i %d j %d k %d , data "
-                                     "are not the same 0x%x 0x%x \n",
-                                     i, j, k, pprBoottimeDataOut[i].payload[k],
-                                     pprBoottimeDataIn[j].payload[k]);
-                    // break;
                     match = false;
+                    break;
                 }
             } // end of for k
             if (match)
@@ -272,6 +267,20 @@ UINT8 BootTimePprData::compareBiosData()
     }     // end of for i
     if (BiosOutCnt >= matchCnt)
         ret = BiosOutCnt - matchCnt;
+
+    /* A word mismatch is normal while searching for the matching BIOS
+     * result. Report only BT entries that found no BIOS result. */
+    for (i = 0; i < BiosOutCnt; i++)
+    {
+        if (MatchIndex[i] != BT_MATCH)
+        {
+            sd_journal_print(LOG_INFO,
+                             "compareBiosData: BT entry %d (PL0 0x%x) has no "
+                             "BIOS result, will resend\n",
+                             i, pprBoottimeDataOut[i].payload[0]);
+        }
+    }
+
     sd_journal_print(LOG_INFO,
                      "compareBiosData ret(Out Cnt) = %d , match Cnt = %d\n",
                      ret, matchCnt);
@@ -280,7 +289,7 @@ UINT8 BootTimePprData::compareBiosData()
 
 void BootTimePprData::WriteHostSharedMem()
 {
-    UINT8 index = PPR_BT_HEADER_SIZE;
+    uint32_t index = PPR_BT_HEADER_SIZE;
     UINT8 outCnt = 0;
     struct BiosPprHeader* BiosPprHeader_ptr = nullptr;
     struct BiosPprData* BiosPprData_ptr = nullptr;
