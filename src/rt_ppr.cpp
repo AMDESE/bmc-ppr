@@ -68,13 +68,6 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     if (sp8)
     {
         uint8_t ch = (Ch & DIMM_SN_SP8_CH_MASK);
-        if (ch >= MAX_DIMM_SLOT_SP8)
-        {
-            sd_journal_print(LOG_ERR,
-                             "GetDimmSerialNum: Invalid SP8 channel %d\n",
-                             Ch);
-            return MAX_DIMM_SLOT;
-        }
 
         dimmAddr = (uint8_t)(DIMM_ADDR_SP8[ch] + DIMM_SN_MODE_1);
 
@@ -89,13 +82,6 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     else
     {
         dimm = (Ch & DIMM_SN_CH_MASK);
-        if (dimm >= MAX_DIMM_SLOT_PER_SOC)
-        {
-            sd_journal_print(LOG_ERR,
-                             "GetDimmSerialNum: Invalid channel %d\n",
-                             Ch);
-            return MAX_DIMM_SLOT;
-        }
 
         dimmAddr = (uint8_t)(DIMM_ADDR_SP7[dimm] + DIMM_SN_MODE_1);
 
