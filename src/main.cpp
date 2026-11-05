@@ -187,6 +187,9 @@ void ReadHostQueue2()
             bool signalled =
                 (buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
                 (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG);
+            // Evaluate on every signalled read so a 0x80 handled via the
+            // new-doorbell path is also marked handled (no duplicate poll).
+            bool pending = signalled && isBiosRequestPending();
             bool startPoll = false;
 
             if (signalled != prevSignalled)
@@ -204,7 +207,7 @@ void ReadHostQueue2()
                                  "poll \n");
                 startPoll = true;
             }
-            else if (signalled && isBiosRequestPending())
+            else if (pending)
             {
                 sd_journal_print(LOG_INFO,
                                  " ReadHostQueue2: new BIOS request in "

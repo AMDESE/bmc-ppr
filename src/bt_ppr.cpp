@@ -24,6 +24,11 @@
 BootTimePprDataHolder* BootTimePprDataHolder::instance = 0;
 using namespace std;
 
+// Set once a 0x80 (disable OOB) header has been handled, so a 0x80 left
+// in the mailbox does not start a poll every second. Cleared when the
+// header changes to anything else.
+static bool disableOobHandled = false;
+
 bool isBiosRequestPending()
 {
     if (base_addr == NULL)
@@ -32,8 +37,29 @@ bool isBiosRequestPending()
     volatile struct BiosPprHeader* hdr =
         (volatile struct BiosPprHeader*)base_addr;
 
-    return (hdr->Signature == BOOTTIME_PPR_SIGNATURE) &&
-           (hdr->Command == BT_PPR_CMD_BIOS_CNT);
+    // Read the volatile header once; BIOS may update it at any time.
+    UINT32 sig = hdr->Signature;
+    UINT8 cmd = hdr->Command;
+
+    if (sig != BOOTTIME_PPR_SIGNATURE)
+    {
+        disableOobHandled = false;
+        return false;
+    }
+
+    if (cmd != BT_PPR_CMD_DISABLE_OOB)
+        disableOobHandled = false;
+
+    if (cmd == BT_PPR_CMD_BIOS_CNT)
+        return true;
+
+    if ((cmd == BT_PPR_CMD_DISABLE_OOB) && !disableOobHandled)
+    {
+        disableOobHandled = true;
+        return true;
+    }
+
+    return false;
 }
 
 bool BootTimePprData::getBiosInData()

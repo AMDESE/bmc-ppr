@@ -156,4 +156,8 @@ class BootTimePprData
     UINT8 compareBiosData();
 };
 
+// True when BIOS has posted a request in the shared-memory mailbox that
+// the BMC has not handled yet: always for 0x81, and once per request for
+// 0x80 (disable OOB), so a 0x80 left in the mailbox does not start a poll
+// every second.
 bool isBiosRequestPending();
