@@ -65,40 +65,43 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 
     bool sp8 = useSp8DimmMap(Socket);
 
-    dimm = (Ch & DIMM_SN_CH_MASK);
-    if (dimm >= MAX_DIMM_SLOT_PER_SOC)
-    {
-        sd_journal_print(LOG_ERR,
-                         "GetDimmSerialNum: Invalid channel %d\n",
-                         Ch);
-        return MAX_DIMM_SLOT;
-    }
-
     if (sp8)
     {
-        dimmAddr = (uint8_t)(DIMM_ADDR_SP8[dimm] + DIMM_SN_MODE_1);
+        uint8_t ch = (Ch & DIMM_SN_SP8_CH_MASK);
+
+        dimmAddr = (uint8_t)(DIMM_ADDR_SP8[ch] + DIMM_SN_MODE_1);
+
+        if (Chip >= DIMM_CHIP_2DPC)
+        {
+            dimmAddr += DIMM_SN_2DPC;
+        }
+
+        dimm = (Socket * MAX_DIMM_SLOT_PER_SOC) +
+               ((Chip >= DIMM_CHIP_2DPC) ? MAX_DIMM_SLOT_SP8 : 0) + ch;
     }
     else
     {
+        dimm = (Ch & DIMM_SN_CH_MASK);
+
         dimmAddr = (uint8_t)(DIMM_ADDR_SP7[dimm] + DIMM_SN_MODE_1);
+
+        if (Socket == DIMM_SOCKET_0)
+        { // Socket 0
+            if (Chip >= DIMM_CHIP_2DPC)
+            { // 2 DPC
+                dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+                dimmAddr = dimmAddr + DIMM_SN_2DPC;
+            }
+        }
+        else
+        { // socket 1
+            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+        }
     }
 
     sd_journal_print(LOG_INFO,
                      "GetDimmSerialNum [%s]: Socket %d Ch %d -> dimm %d Addr 0x%02x\n",
                      sp8 ? "SP8" : "SP7", Socket, Ch, dimm, dimmAddr);
-
-    if (Socket == DIMM_SOCKET_0)
-    { // Socket 0
-        if (Chip >= DIMM_CHIP_2DPC)
-        { // 2 DPC
-            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-            dimmAddr = dimmAddr + DIMM_SN_2DPC;
-        }
-    }
-    else
-    { // socket 1
-        dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-    }
 
     // Call APML to get the DIMM SN
     sd_journal_print(LOG_INFO, "GetDimmSerialNum: DIMM = %d Addr = 0x%x \n",
