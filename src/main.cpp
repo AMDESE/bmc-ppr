@@ -156,43 +156,76 @@ void ReadHostQueue2()
     BootTimePprData* btPpr = NULL;
 #ifdef BMC_DEV_IRQ
     int fd = -1;
-    char buff[Q2_READ_CNT];
+    unsigned char buff[Q2_READ_CNT];
     ssize_t ret;
+
+    bool prevSignalled = false;
+
+    sd_journal_print(LOG_INFO, " ReadHostQueue2: Start \n");
 
     while (1)
     {
-        sd_journal_print(LOG_INFO, " ReadHostQueue2: Start \n");
-
         fd = open(indexFile.c_str(), O_RDWR, 0);
         if (fd < 0)
         {
             sd_journal_print(LOG_ERR,
                              " ReadHostQueue2: Failed to Open Que 2\n");
-            close(fd);
             exit(-1);
         }
 
         ret = read(fd, buff, Q2_READ_CNT);
-        if (ret < 0)
+        close(fd);
+
+        if (ret < Q2_READ_CNT)
         {
-            sd_journal_print(
-                LOG_ERR, " ReadHostQueue2: Read Failed with return %d \n", (int)ret);
+            sd_journal_print(LOG_ERR,
+                             " ReadHostQueue2: Read Failed with return %d \n",
+                             (int)ret);
         }
         else
         {
-            sd_journal_print(LOG_INFO,
-                             " ReadHostQueue2:Read return Data 0x%x "
-                             "0x%x 0x%x 0x%x \n",
-                             buff[0], buff[1], buff[2], buff[3]);
-            if ((buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
-                (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG))
+            bool signalled =
+                (buff[0] == Q2_BIOS_SIG) && (buff[1] == Q2_BIOS_SIG) &&
+                (buff[2] == Q2_BIOS_SIG) && (buff[3] == Q2_BIOS_SIG);
+            // Evaluate on every signalled read so a 0x80 handled via the
+            // new-doorbell path is also marked handled (no duplicate poll).
+            bool pending = signalled && isBiosRequestPending();
+            bool startPoll = false;
+
+            if (signalled != prevSignalled)
+            {
+                sd_journal_print(LOG_INFO,
+                                 " ReadHostQueue2: Data changed 0x%x 0x%x "
+                                 "0x%x 0x%x \n",
+                                 buff[0], buff[1], buff[2], buff[3]);
+            }
+
+            if (signalled && !prevSignalled)
+            {
+                sd_journal_print(LOG_INFO,
+                                 " ReadHostQueue2: new doorbell, start BT "
+                                 "poll \n");
+                startPoll = true;
+            }
+            else if (pending)
+            {
+                sd_journal_print(LOG_INFO,
+                                 " ReadHostQueue2: new BIOS request in "
+                                 "mailbox, start BT poll \n");
+                startPoll = true;
+            }
+
+            prevSignalled = signalled;
+
+            if (startPoll)
             {
                 if (btPpr != NULL)
                     delete btPpr;
+                // Blocks until the handshake finishes or MAX_RETRY is hit
                 btPpr = new BootTimePprData();
             }
         }
-        close(fd);
+
         sleep(1);
     } // end of while
 #else
