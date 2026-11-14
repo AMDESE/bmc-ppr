@@ -24,17 +24,54 @@
 BootTimePprDataHolder* BootTimePprDataHolder::instance = 0;
 using namespace std;
 
+// Set once a 0x80 (disable OOB) header has been handled, so a 0x80 left
+// in the mailbox does not start a poll every second. Cleared when the
+// header changes to anything else.
+static bool disableOobHandled = false;
+
+bool isBiosRequestPending()
+{
+    if (base_addr == NULL)
+        return false;
+
+    volatile struct BiosPprHeader* hdr =
+        (volatile struct BiosPprHeader*)base_addr;
+
+    // Read the volatile header once; BIOS may update it at any time.
+    UINT32 sig = hdr->Signature;
+    UINT8 cmd = hdr->Command;
+
+    if (sig != BOOTTIME_PPR_SIGNATURE)
+    {
+        disableOobHandled = false;
+        return false;
+    }
+
+    if (cmd != BT_PPR_CMD_DISABLE_OOB)
+        disableOobHandled = false;
+
+    if (cmd == BT_PPR_CMD_BIOS_CNT)
+        return true;
+
+    if ((cmd == BT_PPR_CMD_DISABLE_OOB) && !disableOobHandled)
+    {
+        disableOobHandled = true;
+        return true;
+    }
+
+    return false;
+}
+
 bool BootTimePprData::getBiosInData()
 {
     UINT32 Signature;
     UINT8 Command;
 
-    sd_journal_print(LOG_INFO, "getBiosInData Start 0x%p", base_addr);
+    sd_journal_print(LOG_DEBUG, "getBiosInData Start 0x%p", base_addr);
     BiosInCnt = 0;
     if (base_addr != NULL)
     {
-        BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
-        BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
+        struct BiosPprHeader* BiosPprHeader_ptr = (struct BiosPprHeader*)((UINT8*)base_addr);
 
         if (BiosPprHeader_ptr != NULL)
         {
@@ -44,7 +81,8 @@ bool BootTimePprData::getBiosInData()
             if (Signature == BOOTTIME_PPR_SIGNATURE)
             {
                 sd_journal_print(
-                    LOG_INFO, "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
+                    (Command == BT_PPR_CMD_BMC_CNT) ? LOG_DEBUG : LOG_INFO,
+                    "getBiosInData Signature 0x%x Cnt 0x%x Cmd 0x%x",
                     Signature, BiosInCnt, Command);
 
                 if (Command == BT_PPR_CMD_BIOS_CNT)
@@ -67,7 +105,9 @@ bool BootTimePprData::getBiosInData()
                 }
                 else if (Command == BT_PPR_CMD_BMC_CNT)
                 {
-                    sd_journal_print(LOG_INFO, "getBiosInData BMC Signature");
+                    // Our own reply is still in the mailbox; keep waiting.
+                    // Do not return true here.
+                    sd_journal_print(LOG_DEBUG, "getBiosInData BMC Signature");
                 }
                 else if (Command == BT_PPR_CMD_DISABLE_OOB)
                 {
@@ -115,9 +155,9 @@ void BootTimePprData::ReadBootTimePprData(UINT8 entryCount)
 {
     if (entryCount > 0)
     {
-        UINT8 index = PPR_BT_HEADER_SIZE;
+        uint32_t index = PPR_BT_HEADER_SIZE;
         char buffer[CMD_BUFF_LEN];
-        BiosPprData* BiosPprData_ptr = new BiosPprData();
+        struct BiosPprData* BiosPprData_ptr = nullptr;
 
         for (int i = 0; i < (int)entryCount; i++)
         {
@@ -210,13 +250,8 @@ UINT8 BootTimePprData::compareBiosData()
                 if ((pprBoottimeDataOut[i].payload[k] & payloadMask[k]) !=
                     (pprBoottimeDataIn[j].payload[k] & payloadMask[k]))
                 {
-                    sd_journal_print(LOG_INFO,
-                                     "compareBiosData i %d j %d k %d , data "
-                                     "are not the same 0x%x 0x%x \n",
-                                     i, j, k, pprBoottimeDataOut[i].payload[k],
-                                     pprBoottimeDataIn[j].payload[k]);
-                    // break;
                     match = false;
+                    break;
                 }
             } // end of for k
             if (match)
@@ -232,6 +267,20 @@ UINT8 BootTimePprData::compareBiosData()
     }     // end of for i
     if (BiosOutCnt >= matchCnt)
         ret = BiosOutCnt - matchCnt;
+
+    /* A word mismatch is normal while searching for the matching BIOS
+     * result. Report only BT entries that found no BIOS result. */
+    for (i = 0; i < BiosOutCnt; i++)
+    {
+        if (MatchIndex[i] != BT_MATCH)
+        {
+            sd_journal_print(LOG_INFO,
+                             "compareBiosData: BT entry %d (PL0 0x%x) has no "
+                             "BIOS result, will resend\n",
+                             i, pprBoottimeDataOut[i].payload[0]);
+        }
+    }
+
     sd_journal_print(LOG_INFO,
                      "compareBiosData ret(Out Cnt) = %d , match Cnt = %d\n",
                      ret, matchCnt);
@@ -240,10 +289,10 @@ UINT8 BootTimePprData::compareBiosData()
 
 void BootTimePprData::WriteHostSharedMem()
 {
-    UINT8 index = PPR_BT_HEADER_SIZE;
+    uint32_t index = PPR_BT_HEADER_SIZE;
     UINT8 outCnt = 0;
-    BiosPprHeader* BiosPprHeader_ptr = new BiosPprHeader();
-    BiosPprData* BiosPprData_ptr = new BiosPprData();
+    struct BiosPprHeader* BiosPprHeader_ptr = nullptr;
+    struct BiosPprData* BiosPprData_ptr = nullptr;
 
     // Get BT PPR Data
     BiosOutCnt = setBiosOutData();

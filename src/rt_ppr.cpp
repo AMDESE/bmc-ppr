@@ -1,6 +1,60 @@
 #include "rt_ppr.hpp"
 
 commonPPR* commonPPR::instance = 0;
+// SP5 / SP7 16-channel mapping table
+static const uint8_t DIMM_ADDR_SP7[MAX_DIMM_SLOT_PER_SOC] = {
+    7, 3, 5, 1, 6, 2, 4, 0, 15, 11, 13, 9, 14, 10, 12, 8};
+
+// SP8 BIOS runtime PPR payload channel (0..7) to Package Physical Channel (APML offset 0..7)
+static const uint8_t DIMM_ADDR_SP8[MAX_DIMM_SLOT_PER_SOC] = {
+    3, 1, 2, 0, 7, 5, 6, 4,
+    0, 0, 0, 0, 0, 0, 0, 0};
+
+// Family 1Ah, Model 90h-9Bh (SP8). SP7 WH is Family 1Ah, Model 50h-5Fh.
+const uint32_t SP8_PROC_FAMILY = 0x1A;
+const uint32_t SP8_PROC_MODEL_MIN = 0x90;
+const uint32_t SP8_PROC_MODEL_MAX = 0x9B;
+
+// -1 unknown, 0 SP7 map, 1 SP8 map. Failures are not cached.
+static int dimmMapIsSp8 = -1;
+
+static bool useSp8DimmMap(uint16_t socket)
+{
+    struct processor_info procInfo = {};
+    oob_status_t ret;
+
+    if (dimmMapIsSp8 >= 0)
+    {
+        return dimmMapIsSp8 == 1;
+    }
+
+    ret = esmi_get_processor_info((uint8_t)socket, &procInfo);
+    if (ret != OOB_SUCCESS)
+    {
+        sd_journal_print(LOG_ERR,
+                         "GetDimmSerialNum: processor info failed (%d), "
+                         "using SP7 DIMM map\n",
+                         ret);
+        return false;
+    }
+
+    dimmMapIsSp8 = (procInfo.family == SP8_PROC_FAMILY &&
+                    procInfo.model >= SP8_PROC_MODEL_MIN &&
+                    procInfo.model <= SP8_PROC_MODEL_MAX)
+                       ? 1
+                       : 0;
+    sd_journal_print(LOG_INFO,
+                     "GetDimmSerialNum: family 0x%x model 0x%x -> %s "
+                     "DIMM map\n",
+                     procInfo.family, procInfo.model,
+                     dimmMapIsSp8 ? "SP8" : "SP7");
+    return dimmMapIsSp8 == 1;
+}
+
+uint16_t childPprData::getTotalPprCount()
+{
+    return (m_pprRuntimeIndex + globalBT->getBTindex() - m_rtToBtCount);
+}
 
 int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
 {
@@ -9,25 +63,45 @@ int childPprData::GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip)
     uint32_t dimmData;
     oob_status_t ret_oob;
 
-    dimm = (Ch & DIMM_SN_CH_MASK);
-    if (dimm >= MAX_DIMM_SLOT_PER_SOC)
-    {
-        return MAX_DIMM_SLOT;
-    }
-    dimmAddr = (uint8_t)(dimm + DIMM_SN_MODE_1);
+    bool sp8 = useSp8DimmMap(Socket);
 
-    if (Socket == DIMM_SOCKET_0)
-    { // Socket 0
+    if (sp8)
+    {
+        uint8_t ch = (Ch & DIMM_SN_SP8_CH_MASK);
+
+        dimmAddr = (uint8_t)(DIMM_ADDR_SP8[ch] + DIMM_SN_MODE_1);
+
         if (Chip >= DIMM_CHIP_2DPC)
-        { // 2 DPC
-            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
-            dimmAddr = dimmAddr + DIMM_SN_2DPC;
+        {
+            dimmAddr += DIMM_SN_2DPC;
         }
+
+        dimm = (Socket * MAX_DIMM_SLOT_PER_SOC) +
+               ((Chip >= DIMM_CHIP_2DPC) ? MAX_DIMM_SLOT_SP8 : 0) + ch;
     }
     else
-    { // socket 1
-        dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+    {
+        dimm = (Ch & DIMM_SN_CH_MASK);
+
+        dimmAddr = (uint8_t)(DIMM_ADDR_SP7[dimm] + DIMM_SN_MODE_1);
+
+        if (Socket == DIMM_SOCKET_0)
+        { // Socket 0
+            if (Chip >= DIMM_CHIP_2DPC)
+            { // 2 DPC
+                dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+                dimmAddr = dimmAddr + DIMM_SN_2DPC;
+            }
+        }
+        else
+        { // socket 1
+            dimm = dimm + MAX_DIMM_SLOT_PER_SOC;
+        }
     }
+
+    sd_journal_print(LOG_INFO,
+                     "GetDimmSerialNum [%s]: Socket %d Ch %d -> dimm %d Addr 0x%02x\n",
+                     sp8 ? "SP8" : "SP7", Socket, Ch, dimm, dimmAddr);
 
     // Call APML to get the DIMM SN
     sd_journal_print(LOG_INFO, "GetDimmSerialNum: DIMM = %d Addr = 0x%x \n",
@@ -110,11 +184,18 @@ void childPprData::SetBTfromRT(int index)
     btIndex = globalBT->getBTindex();
     sd_journal_print(LOG_INFO, "setBTfromRT: Add Boottime Entry Index = %d \n",
                      btIndex);
+    if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+    {
+        sd_journal_print(
+            LOG_ERR, "SetBTfromRT: No free PPR slots available");
+        return;
+    }
     globalBT->setBTdata(
         true, RUNTIME, m_pprRuntimeData[index].repairEntryNum,
         (m_pprRuntimeData[index].repairType | PPR_TYPE_BOOTTIME_MASK),
         m_pprRuntimeData[index].socNum, PPR_STATUS_REPAIR_NOT_PROCESSED,
         payload);
+    m_rtToBtCount++;
 }
 void childPprData::deleteAll()
 {
@@ -134,6 +215,15 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
 
     if ((repairType & PPR_TYPE_BOOTTIME_MASK) == 0)
     {
+        if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "setPPRData: (RT) PPR Max request reached. "
+                "RuntimeIndex=%u BTIndex=%u RTtoBTcnt=%u Max=%u",
+                m_pprRuntimeIndex, globalBT->getBTindex(), m_rtToBtCount, MAX_REPAIR_SLOTS);
+            return false;
+        }
         if (m_currentRuntimeCnt == 0)
         {
             m_currentRuntimeIndex = m_pprRuntimeIndex;
@@ -162,14 +252,20 @@ bool childPprData::setPostPackageRepairData(uint16_t repairEntryNum,
             m_pprRuntimeData[m_pprRuntimeIndex].payload[i] = *it;
             i++;
         }
-        if ((m_pprRuntimeIndex + globalBT->getBTindex()) < MAX_REPAIR_SLOTS)
-        {
-            m_pprRuntimeIndex++;
-        }
+        m_pprRuntimeIndex++;
     }
     else
     {
         index = globalBT->getBTindex();
+        if (getTotalPprCount() >= MAX_REPAIR_SLOTS)
+        {
+            sd_journal_print(
+                LOG_ERR,
+                "setPPRData: (BT) PPR Max request reached. "
+                "RuntimeIndex=%u BTIndex=%u Max=%u",
+                m_pprRuntimeIndex, globalBT->getBTindex(), MAX_REPAIR_SLOTS);
+            return false;
+        }
         sd_journal_print(LOG_INFO,
                          "setPPRData: Boottime Entry Num = %d, Index = %d \n",
                          repairEntryNum, index);

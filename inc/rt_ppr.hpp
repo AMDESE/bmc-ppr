@@ -82,8 +82,9 @@ const int PAYLOAD_4 = 4;
 const int PAYLOAD_6 = 6;
 const int MAX_REPAIR_SLOTS = 64;
 const int MAX_CURRENT_Runtime_PPR = 8;
-const int MAX_DIMM_SLOT = 24;
-const int MAX_DIMM_SLOT_PER_SOC = 12;
+const int MAX_DIMM_SLOT = 32;
+const int MAX_DIMM_SLOT_PER_SOC = 16;
+const int MAX_DIMM_SLOT_SP8 = 8;
 const int DIMM_SOCKET_PL_NUM = 3;
 const int DIMM_SOCKET_MASK = 0xE000;
 const int DIMM_SOCKET_SHIFT = 13;
@@ -99,6 +100,7 @@ const int DIMM_SN_LSB_MASK = 0x0000FFFF;
 const int DIMM_SN_MSB_MASK = 0xFFFF0000;
 const int DIMM_SN_MSB_SHIFT = 16;
 const int DIMM_SN_CH_MASK = 0x0F;
+const int DIMM_SN_SP8_CH_MASK = 0x07;
 const int DIMM_SN_MODE_1 = 0x80;
 const int DIMM_SN_2DPC = 0x10;
 const int BT_SET_TO_HARD_MASK = 0x0001;
@@ -291,6 +293,14 @@ class commonPPR
                    uint16_t repairType, uint16_t socNum, uint16_t result,
                    std::vector<uint16_t> payload)
     {
+        if (m_pprBoottimeIndex >= MAX_REPAIR_SLOTS)
+	{
+            sd_journal_print(
+                LOG_ERR,
+                "setBTdata: Maximum Boot-Time PPR slots (%d) reached",
+                MAX_REPAIR_SLOTS);
+            return;
+        }
         m_pprBoottimeData[m_pprBoottimeIndex].repairEntryNum = repairEntryNum;
         m_pprBoottimeData[m_pprBoottimeIndex].repairType = repairType;
         m_pprBoottimeData[m_pprBoottimeIndex].socNum = socNum;
@@ -567,6 +577,7 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
         m_pprRuntimeIndex = 0;
         m_currentRuntimeIndex = 0;
         m_currentRuntimeCnt = 0;
+        m_rtToBtCount = 0;
         globalBT->setMultiHostState();
         globalBT->setBTindex(0);
         globalBT->readConfigFile();
@@ -622,6 +633,8 @@ struct childPprData : sdbusplus::server::object_t<ppr_data, delete_all>
     uint16_t m_pprRuntimeIndex;
     uint16_t m_currentRuntimeIndex;
     uint16_t m_currentRuntimeCnt;
+    uint16_t m_rtToBtCount;
+    uint16_t getTotalPprCount();
     void SetBTfromRT(int index);
     int GetDimmSerialNum(uint16_t Socket, uint16_t Ch, uint16_t Chip);
     uint16_t DimmSN0[MAX_DIMM_SLOT];
