@@ -15,9 +15,12 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -65,7 +68,14 @@ struct RtPprEntry
     uint16_t payload[PAYLOAD_SIZE]{};
 
     uint16_t repairResult{static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED)};
+
+    // Set when the entry is not sent to the CPU; reported in the status file
+    std::string skipReason;
 };
+
+// Repair target: SocNum and payload words 0-3 (bank, device, chip select,
+// column, row, rank multiplier, channel, sub-channel, socket)
+using RtPprKey = std::array<uint32_t, 5>;
 
 /**
  * RtPprManager
@@ -85,9 +95,16 @@ class RtPprManager
     int         m_retryDelayUs{200000};        // 200 ms
     int         m_statusPollTimeoutMs{5000};
 
+    // Do not repair the same target again within this many seconds
+    int         m_duplicateSuppressSec{120};
+
+    // Last time each target was sent to the CPU
+    std::map<RtPprKey, std::chrono::steady_clock::time_point> m_recentRepairs;
+
     bool loadConfig(const std::string& configFile);
     void scanExistingFiles();
     void processFile(const fs::path& rtpprPath);
+    size_t markSkippedEntries(std::vector<RtPprEntry>& entries);
     bool parseRtPprJson(const fs::path& path,
                         std::vector<RtPprEntry>& entries);
     bool sendRepairData(std::vector<RtPprEntry>& entries);

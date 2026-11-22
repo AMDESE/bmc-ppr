@@ -155,17 +155,90 @@ void RtPprManager::processFile(const fs::path& rtpprPath)
         return;
     }
 
-    if (!sendRepairData(entries))
+    if (markSkippedEntries(entries) == entries.size())
+    {
+        lg2::info("[RtPPR] nothing to send for {FILE}",
+                  "FILE", rtpprPath.filename().string());
+        writeStatusFile(rtpprPath, entries);
+        return;
+    }
+
+    // Send only the remaining entries, numbered 0..n-1 for the mailbox
+    std::vector<RtPprEntry> toSend;
+    std::vector<size_t>     sentIndex;
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        if (entries[i].skipReason.empty())
+        {
+            toSend.push_back(entries[i]);
+            toSend.back().repairEntryNum =
+                static_cast<uint32_t>(toSend.size() - 1);
+            sentIndex.push_back(i);
+        }
+    }
+
+    if (!sendRepairData(toSend))
     {
         lg2::error("[RtPPR] sendRepairData failed for {FILE} â€” writing status anyway",
                    "FILE", rtpprPath.filename().string());
     }
 
-    pollRepairStatus(entries);
+    pollRepairStatus(toSend);
+
+    const auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < toSend.size(); ++i)
+    {
+        RtPprEntry& e = entries[sentIndex[i]];
+        e.repairResult = toSend[i].repairResult;
+        m_recentRepairs[RtPprKey{e.socNum, e.payload[0], e.payload[1],
+                                 e.payload[2], e.payload[3]}] = now;
+    }
     writeStatusFile(rtpprPath, entries);
 
     lg2::info("[RtPPR] END processFile: {FILE}",
               "FILE", rtpprPath.filename().string());
+}
+
+size_t RtPprManager::markSkippedEntries(std::vector<RtPprEntry>& entries)
+{
+    using clock = std::chrono::steady_clock;
+    const auto now    = clock::now();
+    const auto window = std::chrono::seconds(m_duplicateSuppressSec);
+
+    std::erase_if(m_recentRepairs, [&](const auto& item) {
+        return now - item.second > window;
+    });
+
+    std::vector<RtPprKey> inFile;
+    size_t skipped = 0;
+
+    for (auto& e : entries)
+    {
+        const RtPprKey key{e.socNum, e.payload[0], e.payload[1],
+                           e.payload[2], e.payload[3]};
+
+        if (((e.payload[1] >> 15) & 0x1U) == 0)
+        {
+            e.skipReason = "SKIPPED_INVALID";
+        }
+        else if (m_recentRepairs.contains(key) ||
+                 std::find(inFile.begin(), inFile.end(), key) != inFile.end())
+        {
+            e.skipReason = "SKIPPED_DUPLICATE";
+        }
+
+        if (!e.skipReason.empty())
+        {
+            lg2::warning("[RtPPR] Entry[{E}] soc={S} not sent: {WHY}",
+                         "E", e.repairEntryNum, "S", e.socNum, "WHY",
+                         e.skipReason);
+            ++skipped;
+            continue;
+        }
+        inFile.push_back(key);
+    }
+
+    return skipped;
 }
 
 bool RtPprManager::parseRtPprJson(const fs::path& path,
@@ -379,7 +452,8 @@ void RtPprManager::writeStatusFile(const fs::path&              rtpprPath,
         item["SocNum"]          = e.socNum;
         item["RepairResult"]    = e.repairResult;
         item["RepairResultStr"] =
-            (e.repairResult == PPR_STATUS_REPAIR_PASS)           ? "PASS"
+            !e.skipReason.empty()                                 ? e.skipReason
+            : (e.repairResult == PPR_STATUS_REPAIR_PASS)         ? "PASS"
             : (e.repairResult == PPR_STATUS_REPAIR_FAIL)          ? "FAIL"
             : (e.repairResult ==
                static_cast<uint16_t>(PPR_STATUS_REPAIR_NOT_PROCESSED)) ? "NOT_PROCESSED"
